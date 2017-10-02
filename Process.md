@@ -2,16 +2,15 @@
 
 ### Background
 
-Grab and Uber are competing pretty darn hard for the local market right now. After Susan Fowler's post and 
-Travis' controversies starting Feb 2017, I noticed some friends around me grew polarised towards one or the other. 
-I wondered if the company's negative press image would affect the way other customers felt towards 
-the brand as well. 
+Grab and Uber are competing pretty hard for the local market right now. After 
+Travis' controversies started in Feb 2017, I noticed some friends around me grew polarised towards one company or the other. 
+I wondered if the company's negative press image would affect the way other customers felt towards the brand as well. 
 
 This post outlines the process I used to mine public data using R and the Facebook Graph API for Uber and Grab. 
 I then built a `naive bayes` sentiment classifier to label the data and visualised the results below. All in all,
 I'm looking to see if there is a difference in the way people talk about/to Grab and Uber. 
 
-Quick outline of workflow: 
+**Quick outline of workflow:**
 
 * Set up Facebook API 
 * Clean data
@@ -26,7 +25,7 @@ Setting up the API took less than 5 minutes. I made an app, used the `RFacebook`
 [here](https://cran.r-project.org/web/packages/Rfacebook/Rfacebook.pdf) and copied my authentication key from
 the developer's settings page.
 
-```
+```R 
 library(RFacebook)
 
 # Get your own key from facebook
@@ -37,9 +36,9 @@ app_secret <- "ABCDEFGHIJK...Z"
 fbOAuth(app_id, app_secret, extended_permissions = FALSE,
 legacy_permissions = FALSE, scope = NULL)
 ```
-From here, I decided to mine all public comments for the last 6 months, from 01 March 2017 to 31 August 2017. I kept only the *parent* comment in each thread as child comments tend to be the respective customer support staff replying to users' needs. This returns `3182` comments for Grab and `3195` for Uber. 
+From here, I decided to mine all public comments for the last 6 months, from 01 March 2017 to 31 August 2017. I kept only the *parent* comment in each thread as child comments tend to be the respective customer support staff replying to users' needs. 
 
-```
+```R
 # Call Graph API for posts
 # Note: I'm using API v.2.10 but you can leave it as NULL if errors occur
 uber <- callAPI(url, token, api = 2.10)
@@ -52,12 +51,13 @@ grab <- as.data.frame(grab)
 # A tibble:
 [preview data]
 ```
+This returns `3182` comments for Grab and `3195` for Uber.
 
 ### Cleaning the data
 
 First off, I cleaned up the date column. Data was stored in USA time (UTC -8:00) so I need to convert it to Singapore Time (SGT +8:00). I wrote a function `format_FBtime` to do this so I could reuse it on subsequent analyses. This simple function requires the date column to be in string format, and titled `creation_time` (which it is, by default). It returns 2 columns to work with: (1) Original date time (USA) (2) Converted date time (SG).
 
-```
+```R
 library(dplyr)
 library(lubridate)
 
@@ -86,7 +86,7 @@ grab <- format_FBtime(grab); str(grab)
 uber <- format_FBtime(uber); str(uber)
 ```
 Next, I'll do a simple visualisation of the data to check the number of posts per day for both companies, and see if there are any trends in comments by `month`, `day of week` or `hour` the comment was posted. 
-```
+```R
 # Plot 1: Group by number of posts per company per day
 grab1 <- grab %>% 
     dplyr::group_by(DateSG) %>% 
