@@ -1,35 +1,66 @@
-# Title
+# A Tale of Two Taxi Giants
 
 ### Background
 
-Some cool stuff here
+Grab and Uber are competing pretty darn hard for the local market right now. After Susan Fowler's post and 
+Travis' controversies starting Feb 2017, I noticed some friends around me grew polarised towards one or the other. 
+I wondered if the company's negative press image would affect the way other customers felt towards 
+the brand as well. 
 
-### Process
+This post outlines the process I used to mine public data using R and the Facebook Graph API for Uber and Grab. 
+I then built a `naive bayes` sentiment classifier to label the data and visualised the results below. All in all,
+I'm looking to see if there is a difference in the way people talk about/to Grab and Uber. 
 
-Grab and Uber are competing pretty hard for the local market right now. After 
-Travis' dramatic exit, I wondered if the company's negative press image would 
-affect the way day-to-day consumers feel towards the brand. 
+Quick outline of workflow: 
 
-This post outlines the process I used to build a simple `naive bayes` sentiment
-classifier, along with results of my project. 
+* Set up Facebook API 
+* Clean data
+* Build features for machine learning
+* Set up algorithms to label the rest
+* Visualise results
+
+### Mining Facebook Data with R 
+
+I chose Facebook as it has the platform with highest social activity for the brands, compared to Twitter or Instagram.
+Setting up the API took less than 5 minutes. I made an app, used the `RFacebook` package found 
+[here](https://cran.r-project.org/web/packages/Rfacebook/Rfacebook.pdf) and copied my authentication key from
+the developer's settings page.
 
 ```
-# Load libraries
+library(RFacebook)
+
+# Get your own key from facebook
+app_id <- "ABCDEFGHIJK...Z"
+app_secret <- "ABCDEFGHIJK...Z"
+
+# Authenticate
+fbOAuth(app_id, app_secret, extended_permissions = FALSE,
+legacy_permissions = FALSE, scope = NULL)
+```
+From here, I decided to mine all public comments for the last 6 months, from 01 March 2017 to 31 August 2017. I kept only the *parent* comment in each thread as child comments tend to be the respective customer support staff replying to users' needs. This returns `3182` comments for Grab and `3195` for Uber. 
+
+```
+# Call Graph API for posts
+# Note: I'm using API v.2.10 but you can leave it as NULL if errors occur
+uber <- callAPI(url, token, api = 2.10)
+grab <- callAPI(url, token, api = 2.10)
+
+# Data retrieved as JSON, convert to dataframe for working
+uber <- as.data.frame(uber)
+grab <- as.data.frame(grab)
+
+# A tibble:
+[preview data]
+```
+
+### Cleaning the data
+
+First off, I cleaned up the date column. Data was stored in USA time (UTC -8:00) so I need to convert it to Singapore Time (SGT +8:00). I wrote a function `format_FBtime` to do this so I could reuse it on subsequent analyses. This simple function requires the date column to be in string format, and titled `creation_time` (which it is, by default). It returns 2 columns to work with: (1) Original date time (USA) (2) Converted date time (SG).
+
+```
 library(dplyr)
 library(lubridate)
-library(tidytext)
-library(stringr)
 
-library(ggplot2)
-library(grid)
-library(ggthemes)
-```
-
-[Here](link) is a function to tidy up and convert the date-time format 
-from Facebook's API, from `YYYYMMDDTHH:MM:SS` to `YYYY-MM-DD HH:MM:SS`. 
-It's a little long-winded so I won't put it here.
-
-```
 format_FBtime <- function(df){ 
     
     # What this function needs:
@@ -40,39 +71,23 @@ format_FBtime <- function(df){
     # 2. "DatetimeSG" in DATE format (SGT +8:00) as YYYY-MM-DD HH:MM:SS 
     # 3. Drops unformatted column "creation_time"
     
-    df <- mutate(df, Date = paste(year(df$creation_time), 
-                                  month(df$creation_time), 
-                                  day(df$creation_time), 
-                                  sep="-"))
+    df <- mutate(df, Date = paste(year(df$creation_time), month(df$creation_time), day(df$creation_time), sep="-"))
     df <- mutate(df, Time=substr(as.character(df$creation_time),12, 19))
     df <- mutate(df, DatetimeSF = paste(df$Date, df$Time))
-    df$DatetimeSF <- as.POSIXct(strptime(df$DatetimeSF, 
-                                         "%Y-%m-%d %H:%M:%S", 
-                                         tz="Pacific/Easter"))
+    df$DatetimeSF <- as.POSIXct(strptime(df$DatetimeSF, "%Y-%m-%d %H:%M:%S", tz="Pacific/Easter"))
     df <- mutate(df, DatetimeSG = with_tz(df$DatetimeSF, "Singapore"))
     
-    # Use this to manually update any other timezone inaccuracies
-
-    # Remove any unwanted columns here
+    # Remove any unwanted columns here:
     df <- subset(df, select = -c(Date, Time, creation_time))
     return(df)
 }
 
-# Apply format_FBtime function
 grab <- format_FBtime(grab); str(grab)
 uber <- format_FBtime(uber); str(uber)
 ```
-For this study, I'll only keep data from `March 2017` to `August 2017` inclusive,
-over a 6-month period from after Travis left in late Feb.
-
+Next, I'll do a simple visualisation of the data to check the number of posts per day for both companies, and see if there are any trends in comments by `month`, `day of week` or `hour` the comment was posted. 
 ```
-grab <- grab[grab$DatetimeSG >= as.Date("010317", "%d%m%y") & grab$DatetimeSG < as.Date("010917", "%d%m%y"), ] # n=3182
-uber <- uber[uber$DatetimeSG >= as.Date("010317", "%d%m%y") & uber$DatetimeSG < as.Date("010917", "%d%m%y"), ] # n=3159
-```
-I'll throw the data into a simple plot to check the number of posts per day for 
-both companies. 
-```
-# Format: Group by number of posts per company
+# Plot 1: Group by number of posts per company per day
 grab1 <- grab %>% 
     dplyr::group_by(DateSG) %>% 
     dplyr::summarise(n = n()) 
@@ -85,6 +100,14 @@ timeseries[is.na(timeseries)] <- 0
 timeseries <- transform(timeseries, 
               Date = as.POSIXct(strptime(timeseries$DateSG, "%Y-%m-%d", tz="Singapore")),
               Grab = as.numeric(Grab), Uber = as.numeric(Uber))
+              
+### EDIT THIS TO CHECK FOR NUM POSTS PER WEEKDAY, HOUR.
+```
+Plot this out: 
+```
+library(ggplot2)
+library(ggthemes)
+library(grid)
 
 # [ Plot 1 = num posts per day as timeseries line graph]
 ggplot(timeseries, aes(as.Date(DateSG))) + 
@@ -92,72 +115,97 @@ ggplot(timeseries, aes(as.Date(DateSG))) +
     geom_line(aes(y = Grab, color="Grab"), size= 0.75, colour="forest green") + 
     labs(colour="Company", x=NULL, y="Number of Comments") +
     scale_x_date(date_breaks = "1 month", date_labels = "%b") + 
-    ggtitle("Total Comments per Day, Grab & Uber", 
-            subtitle = "(based on public data from Facebook)") +
-    theme(plot.title = element_text(family="Tahoma", face="bold", size=15),
-          plot.subtitle = element_text(face="italic",size=6),
-          legend.box = "horizontal",
-          legend.box.just="left",
-          legend.key.size = unit(0.5, "cm"),
-          legend.text = element_text(face="bold",size = 6),
-          legend.position = "bottom",
+    ggtitle("Total Comments per Day, Grab & Uber", subtitle = "(based on public data from Facebook)") +
+    theme(plot.title = element_text(family="Tahoma", face="bold", size=15), plot.subtitle = element_text(face="italic",size=6),
+          legend.box = "horizontal", legend.box.just="left", legend.key.size = unit(0.5, "cm"), 
+          legend.text = element_text(face="bold",size = 6), legend.position = "bottom",
           axis.title = element_text(size=9))
-
+```
+GRAPH HERE
+```
 # [plot 2 = num posts per day per company as back-to-back histogram]
-# Plot number of posts over time, by day
 colnames(grab1)[2] = "Num_comments"; colnames(uber1)[2] = "Num_comments"
-uber1 <- mutate(uber1, Company='Uber')
-grab1 <- mutate(grab1, Company='Grab', Num_comments=Num_comments*-1)
+uber1 <- mutate(uber1, Company='Uber'); grab1 <- mutate(grab1, Company='Grab', Num_comments=Num_comments*-1)
 timeseries2 <- rbind(uber1, grab1) %>%
     transform(DateSG = as.Date(DateSG)) 
 
 # Uber (right side)
 plot_uber <- ggplot(timeseries2, aes(x=DateSG)) + 
     geom_bar(data = subset(timeseries2, Company == 'Uber'), aes(y=Num_comments, fill = Num_comments), 
-    colour="black", stat = "identity") +
-    scale_x_date(date_breaks = "1 month", date_labels = "%b")
+    colour="black", stat = "identity") + scale_x_date(date_breaks = "1 month", date_labels = "%b")
 
-# Grab (left)
+# Grab (left side)
 print(plot_uber + geom_bar(data = subset(timeseries2, Company == 'Grab'), 
              aes(y= Num_comments, fill = Num_comments), colour="dark green", stat = 'identity') +
-    scale_y_continuous(breaks= seq(-75, 75, 25), limits = c(-75, 75), position = "right", 
-    name = "Grab  - - -  Uber") + xlab("") + 
-    scale_fill_gradient2(low ="forest green", mid = "white", high = "black", midpoint = 0, space = "rgb") +
+    scale_y_continuous(breaks= seq(-75, 75, 25), limits = c(-75, 75), position = "right", name = "Grab  - - -  Uber") + 
+    xlab("") + scale_fill_gradient2(low ="forest green", mid = "white", high = "black", midpoint = 0, space = "rgb") +
         theme(legend.position = "none") + coord_flip())
 ```
-Now I'll get to engineering some features to make sentiment detection easier. 
+GRAPH HERE
 
-Here's a basic one for counting the number of words per comment.
+Doesn't seem to be any major differences in number of comments per month, although I note that there's a slight increase in comments in ______ month due to ______ hosting X promos. That aside, there isn't any particular surge in number of posts by weekday or hour either. 
+
+Finally, I make a simple column to count the number of words per comment. Just in case, y'know, angry comments tend to be longer or something. 
 ```
-uber$wordcount <- str_count(uber$post_comment, '\\s+')+1
-grab$wordcount <- str_count(grab$post_comment, '\\s+')+1
-
 # Remove non-ASCII characters in comments, usernames
 uber$post_comment <- gsub("[^0-9A-Za-z\\\',!?:;.-_@#$%^&*()\" ]", "", uber$post_comment)
 uber$post_username <- gsub("[^0-9A-Za-z\\\',!?:;.-_@#$%^&*()\" ]", "", uber$post_username)
 grab$post_comment <- gsub("[^0-9A-Za-z\\\',!?:;.-_@#$%^&*()\" ]", "", grab$post_comment)
 grab$post_username <- gsub("[^0-9A-Za-z\\\',!?:;.-_@#$%^&*()\" ]", "", grab$post_username)
-```
-Next, I was inspired by [this post](link) by Andy Bromberg who used the [AFINN dictionary](link) 
-to make his own classifier. 
 
-The AFINN dictionary is ... (explanation)
-
-Initially, I replicated Bromberg's method, but those features did not significantly increase the accuracy
-of prediction with this dataset. This was likely due to high statistical collinearity of variables, so I left them 
-out of the rest of the discussion. 
-(If you're curious, you can still find them in the [full R code](link) hosted on my github.)
-
-Following, I modified the AFINN dictionary slightly to include more local colour, and made a 
-single feature to calculate the mean AFINN score of each comment, spanning several sentences. 
+# Count words
+uber$wordcount <- str_count(uber$post_comment, '\\s+')+1
+grab$wordcount <- str_count(grab$post_comment, '\\s+')+1
 
 ```
-### Modify AFINN
+I can't think of any (publicly available) features that might be correlated to the sentiment of comments for now, so I'll move on to sentiment analysis.
+
+### Sentiment Analysis
+
+From the dataset, I manually tagged about 20% of the comments (1,200) with labels as `positive`, `neutral`, `negative` based on their tone. Although most comments were short (<2 sentences), this took about 4 hours. I noticed that most comments were complaints or queries, so I tried to ignore their content (mostly neutral or negative) and focused on their *tone* (which could still be positive - ie. a confused but still polite customer). 
+
+Also, to get a baseline, I ran the pure comments data straight through the `naive bayes` machine from the `e1071` package without any support feature vectors. I'm aware that training and testing on the same dataset tends to lead to overfitting, but in this situation I just wanted to get a baseline estimate of how well the classifier would perform. 
+
+```
+library(e1071)
+# Extract only labelled posts
+uber_lab <- uber[!is.na(uber$sentiment),] #n=1,391
+grab_lab <- grab[!is.na(grab$sentiment),] #n=1,237
+
+# Build naive bayes model -- note that it tests and trains on same set of data
+classifier_g <- naiveBayes(grab_lab[,c(11:12, 18)], grab_lab[,5])
+classifier_u <- naiveBayes(uber_lab[,c(11:12, 17)], uber_lab[,5])
+
+# Predict & print results in table
+predicted_g <- predict(classifier_g, grab_lab)
+predicted_u <- predict(classifier_u, uber_lab)
+results_g <- table(predicted_g, grab_lab[,5], dnn=list('predicted','actual'))
+results_u <- table(predicted_u, uber_lab[,5], dnn=list('predicted','actual'))
+
+# Binomial test for confidence intervals
+binom.test(results_g[1,1] + results_g[2,2]+ results_g[3,3], nrow(grab_lab), p=0.5)
+binom.test(results_u[1,1] + results_u[2,2]+ results_u[3,3], nrow(uber_lab), p=0.5)
+```
+The accuracy was really low - `41%`. 
+```
+RESULTS OF JUST NB WITHOUT FEATURES:
+```
+Moving forward, I started building things to help the machine better detect sentiment. I came across [this post](here) by XXXXXXX detailing three sentiment dictionaries commonly used in classification: The AFINN, NRC and BING lists. I chose to use the AFINN dictionary as it dealt directly with sentiment rather than emotion, which is the focus of this project. 
+
+> The AFINN dictionary... (explanation here)
+
+Initially, I replicated Bromberg's method, but those features did not significantly increase the accuracy of prediction so I'll leave them out of my discussion. You can find the adapted workings in my [full R code](link) hosted on my github. The results looked like this:
+
+```
+RESULTS WITH AFINN BROMBERG
+```
+Following, I modified the AFINN dictionary to include more local colour, and made a single feature to calculate the mean AFINN score of each comment rather than take an aggregated sum of scores. 
+
+```
+### Load AFINN dictionary
 
 # SetWD to home dir; stored files MUST be in [SENTIMENT_ANALYSIS] folder in there
 setwd("~/sentiment_analysis")
-
-# Load word files 
 afinn_list <- read.delim(file='AFINN-111.txt', header=FALSE, stringsAsFactors=FALSE)
 names(afinn_list) <- c('word', 'score')
 afinn_list$word <- tolower(afinn_list$word)
@@ -167,31 +215,25 @@ afinn_list$score[afinn_list$word=="YOURWORDHERE"]
 
 # Modify scores (for words already in AFINN)
 afinn_list$score[afinn_list$word %in% c("best", "nice", "appreciation")] <- 4
-afinn_list$score[afinn_list$word %in% c("charges", "charged", "pay", "like", 
-                                        "joke", "improvement")] <- 0
+afinn_list$score[afinn_list$word %in% c("charges", "charged", "pay", "like", "joke", "improvement")] <- 0
 afinn_list$score[afinn_list$word %in% c("irresponsible", "whatever")] <- -1
-afinn_list$score[afinn_list$word %in% c("cheat", "cheated", "frustrated", 
-                                        "scam", "pathetic", "hopeless",
-                                        "useless", "dishonest", "tricked", 
-                                        "waste", "gimmick", "liar", "lied")] <- -4
+afinn_list$score[afinn_list$word %in% c("cheat", "cheated", "frustrated", "scam", "pathetic", "hopeless",
+                                        "useless", "dishonest", "tricked", "waste", "gimmick", "liar", "lied")] <- -4
 
 # Add scores (for words not in AFINN)
-pos4 <- data.frame(word = c("bagus", "yay", ":)", "kindly", "^^", "yay", "swee", 
-                            "awesome", "polite", "thnks", "thnk", "thx", "thankyou",
+pos4 <- data.frame(word = c("bagus", "yay", ":)", "kindly", "^^", "yay", "swee", "awesome", "polite", "thnks", "thnk", "thx", "thankyou",
                             "tq", "ty", "professional", "pls"), score = 4)
-pos2 <- data.frame(word = c("jiayou", "assist", "amin", "amen", "supper", "dating",
-                            "arigato", "well", "bro"), score = 2)
+pos2 <- data.frame(word = c("jiayou", "assist", "amin", "amen", "supper", "dating", "arigato", "bro"), score = 2)
 pos1 <- data.frame(word = c("hi", "dear", "hello"), score = 1)
 neg1 <- data.frame(word = c("silly", "dafaq", "dafuq", "cringe", "picky"), score = -1)
-neg2 <- data.frame(word = c("jialat", "waited", "waiting", "rubbish", "lousy", "siao", 
-                            "??", "-_-", "-.-", "slap", "slapped", "sicko",
+neg2 <- data.frame(word = c("jialat", "waited", "waiting", "rubbish", "lousy", "siao", "??", "-_-", "-.-", "slap", "slapped", "sicko",
                             "lying", "lies", "wtf", "wts"), score = -2)
 neg4 <- data.frame(word = c("freaking", "knn", "ccb", "fk", "fking", "moronic"), score = -4)
 
 # Merge changes with main AFINN list
 afinn_list <- rbind(afinn_list, pos4, pos2, pos1, neg1, neg2, neg4)
 ```
-*Comment: I don't relaly have an objective basis for why some swear words get a higher rating
+*Note: I don't relaly have an objective basis for why some swear words get a higher rating
 than others, but I classified them by how angry my mother would be when I say them.*
 
 Count sentiment per comment based on net word score:
@@ -200,31 +242,28 @@ Count sentiment per comment based on net word score:
 library(plyr)
 
 # Split comments to single words per cell
-grab_indv <- strsplit(grab$post_comment, split = " ") 
-uber_indv <- strsplit(uber$post_comment, split = " ") 
-uber_words <- data.frame(message_ID = rep(uber_words$message_ID, sapply(uber_indv, length)), words = unlist(uber_indv)) # n=94,856
-grab_words <- data.frame(message_ID = rep(grab_words$message_ID, sapply(grab_indv, length)), words = unlist(grab_indv)) # n=80,334
+grab_indv <- strsplit(grab$post_comment, split = " ") ; uber_indv <- strsplit(uber$post_comment, split = " ") 
+uber_words <- data.frame(message_ID = rep(uber_words$message_ID, sapply(uber_indv, length)), words = unlist(uber_indv)) 
+grab_words <- data.frame(message_ID = rep(grab_words$message_ID, sapply(grab_indv, length)), words = unlist(grab_indv)) 
 grab_words$words <- tolower(grab_words$words); uber_words$words <- tolower(uber_words$words)
 
 # Customise stopwords
 library(tm)
-stop_words <- as.data.frame(stopwords("en"))
-more_stopwords <- as.data.frame(c("uber", "grab", "will", "can", "get", 'u')) # add more if you want
+stop_words <- as.data.frame(stopwords("en")); more_stopwords <- as.data.frame(c("uber", "grab")) 
 names(stop_words)[1] <- "words"; names(more_stopwords)[1] <- "words"
 stop_words <- rbind(stop_words, more_stopwords)
 detach("package:tm", unload=TRUE)
 
 # Remove stopwords, punctuation, empty rows, NA, stopwords again
 uber_words <- uber_words[!(uber_words$words %in% stop_words$words),]
+uber_words <- transform(uber_words, words = (sub("^([[:alpha:]]*).*", "\\1", uber_words$words)))
+uber_words <- uber_words[(!uber_words$words==""),]; uber_words <- uber_words[!is.na(uber_words$words),]
+uber_words <- uber_words[!(uber_words$words %in% stop_words$words),] 
+
 grab_words <- grab_words[!(grab_words$words %in% stop_words$words),]
 grab_words <- transform(grab_words, words = (sub("^([[:alpha:]]*).*", "\\1", grab_words$words)))
-uber_words <- transform(uber_words, words = (sub("^([[:alpha:]]*).*", "\\1", uber_words$words)))
-grab_words <- grab_words[(!grab_words$words==""),]
-uber_words <- uber_words[(!uber_words$words==""),]
+grab_words <- grab_words[(!grab_words$words==""),]; grab_words <- grab_words[!is.na(grab_words$words),]
 grab_words <- grab_words[!(grab_words$words %in% stop_words$words),] 
-uber_words <- uber_words[!(uber_words$words %in% stop_words$words),] 
-grab_words <- grab_words[!is.na(grab_words$words),]
-uber_words <- uber_words[!is.na(uber_words$words),]
 detach("package:plyr", unload=TRUE)
 
 # Match words with AFINN score to calc sentiment by words score
@@ -242,223 +281,30 @@ grab_afinn <- grab_words %>%
 # Convert NAN to 0
 is.nan.data.frame <- function(x) do.call(cbind, lapply(x, is.nan))
 uber_afinn[is.nan(uber_afinn)] <- 0; grab_afinn[is.nan(grab_afinn)] <- 0
-
+```
+From here, I tested to see if there's any significance in scores:
+```
 # Independent samples two-tailed t-test
 t.test(uber_afinn$mean, grab_afinn$mean)
+
+# RESULTS
 ```
-Pausing here, I can see some green flags in this: the t-test returned a p-value of `p<0.0000`,
-suggesting that the difference in sentiments between companies is not insignificant. 
+Turns out there's a significant difference in tone of comments towards both companies, with 
+Grab's customers being a fraction friendlier. 
 
-``# With original dictionary and score=0 only: p-value = 1.8e-14``
+However, it may be that this dictionary merely picks up valenced lexicon without care for negators or amplifiers within a sentence. This means it wouldn't detect sarcasm or awkward double negatives very well. 
+
+To check, I'll run another package on it - the `sentimentR` package, that ... (explanation). 
 
 ```
-# Independent samples two-tailed t-test
-t.test(uber$SentimentR, grab$SentimentR)
+library(SentimentR)
 
-# Join data back to frame
-grab <- dplyr::left_join(grab, grab_afinn, by = "message_ID") 
-uber <- dplyr::left_join(uber, uber_afinn, by = "message_ID")
-grab[is.na(grab)] <- 0
-uber[is.na(uber)] <- 0
-
-# ---------------------------------------------------------------------------- #
-# [plot 5 = boxplot for AFINN distribution]
-
-# Plot bar charts
-grab_boxplot <- grab %>%
-    mutate(Month_num = month(DatetimeSG)) %>%
-    subset(select=c(Month_num, mean)) %>%
-    mutate(Company = "Grab")
-uber_boxplot <- uber %>%
-    mutate(Month_num = month(DatetimeSG)) %>%
-    subset(select=c(Month_num, mean)) %>%
-    mutate(Company = "Uber")
-
-# Format decimal places, remove NAs
-boxplots <- rbind(grab_boxplot, uber_boxplot)
-boxplots$mean <- round(boxplots$mean, digits=2)
-boxplots[is.na(boxplots)] <- 0
-
-# Label month names
-# Labels <- data.frame(num = c(3:9), Date = c("Mar", "Apr", "May", "Jun","Jul", "Aug", "Sep"))
-boxplots <- left_join(boxplots, Labels, by=c("Month_num" = "num")) 
-
-# Boxplot per month by AFINN score
-ggplot(data = boxplots, aes(x=reorder(factor(Date), Month_num), y=mean)) + 
-    geom_boxplot(aes(fill=Company)) + 
-    ggtitle("Distribution of Sentiment by Word", 
-            subtitle = "(Sentiment analysis through AFINN dictionary, based on public data from Facebook)") +
-        xlab(NULL) +
-    scale_y_continuous(name = "AFINN score (neg=rude, pos=polite)",
-                       breaks = seq(-5, 5, 1.0),
-                       limits=c(-5, 5)) + 
-    scale_fill_brewer(palette = "Accent") +
-    theme(plot.title = element_text(family="Tahoma", face="bold", size=15),
-          plot.subtitle = element_text(face="italic",size=6),
-          legend.title = element_text(face="italic",size=6),
-          legend.position = "bottom", 
-          legend.box = "horizontal",
-          legend.box.just="left",
-          legend.key.size = unit(0.5, "cm"),
-          legend.text = element_text(face="bold",size = 6),
-          axis.title = element_text(size=9)) 
-
-# ---------------------------------------------------------------------------- #
-# Make smaller categories of terms
-
-# Not useful: 
-# vNegTerms <- c(afinn_list$word[afinn_list$score==-5 | afinn_list$score==-4])
-# negTerms <- c(afinn_list$word[afinn_list$score==-3 | afinn_list$score==-2 |  afinn_list$score==-1])
-# posTerms <- c(afinn_list$word[afinn_list$score==3 | afinn_list$score==2 | afinn_list$score==1])
-# vPosTerms <- c(afinn_list$word[afinn_list$score==5 | afinn_list$score==4])
-
-# Function to calculate number of words in each category within a sentence
-library(plyr)
-sentimentScore <- function(sentences, vNegTerms, negTerms, posTerms, vPosTerms){
-    final_scores <- matrix('', 0, 5)
-    scores <- plyr::laply(sentences, function(sentence, vNegTerms, negTerms, posTerms, vPosTerms){
-        initial_sentence <- sentence
-        
-        #remove unnecessary characters and split up by word 
-        sentence <- gsub('[[:punct:]]', '', sentence)
-        sentence <- gsub('[[:cntrl:]]', '', sentence)
-        sentence <- gsub('\\d+', '', sentence)
-        sentence <- tolower(sentence)
-        wordList <- str_split(sentence, '\\s+')
-        words <- unlist(wordList)
-        
-        #build vector with matches between sentence and each category
-        vPosMatches <- match(words, vPosTerms)
-        posMatches <- match(words, posTerms)
-        vNegMatches <- match(words, vNegTerms)
-        negMatches <- match(words, negTerms)
-        
-        #sum up number of words in each category
-        vPosMatches <- sum(!is.na(vPosMatches))
-        posMatches <- sum(!is.na(posMatches))
-        vNegMatches <- sum(!is.na(vNegMatches))
-        negMatches <- sum(!is.na(negMatches))
-        score <- c(vNegMatches, negMatches, posMatches, vPosMatches)
-        
-        #add row to scores table
-        newrow <- c(initial_sentence, score)
-        final_scores <- rbind(final_scores, newrow)
-        
-        return(final_scores)
-    }, vNegTerms, negTerms, posTerms, vPosTerms)
-    
-    return(scores)
-}
-
-# ---------------------------------------------------------------------------- #
-# [Apply score counting function]
-
-# Convert and apply function
-grab_vec <- as.vector(grab$post_comment)
-grab_scores <- as.data.frame(sentimentScore(grab_vec, vNegTerms, negTerms, posTerms, vPosTerms))
-
-uber_vec <- as.vector(uber$post_comment)
-uber_scores <- as.data.frame(sentimentScore(uber_vec, vNegTerms, negTerms, posTerms, vPosTerms))
-detach("package:plyr", unload=TRUE)
-
-# Rename
-colnames(grab_scores) <- c('post_comment', 'vNegTerms', 'negTerms', 'posTerms', 'vPosTerms')
-colnames(uber_scores) <- c('post_comment', 'vNegTerms', 'negTerms', 'posTerms', 'vPosTerms')
-
-# Transform to suitable data type
-grab_scores <- transform(grab_scores, 
-                         vNegTerms = as.numeric(vNegTerms),
-                         negTerms = as.numeric(negTerms),
-                         posTerms = as.numeric(posTerms),
-                         vPosTerms = as.numeric(vPosTerms)); str(grab_scores)
-uber_scores <- transform(uber_scores, 
-                         vNegTerms = as.numeric(vNegTerms),
-                         negTerms = as.numeric(negTerms),
-                         posTerms = as.numeric(posTerms),
-                         vPosTerms = as.numeric(vPosTerms)); str(uber_scores)
-
-# Recombine
-grab <- cbind(grab, grab_scores$vNegTerms, grab_scores$negTerms, 
-              grab_scores$posTerms, grab_scores$vPosTerms)
-uber <- cbind(uber, uber_scores$vNegTerms, uber_scores$negTerms, 
-              uber_scores$posTerms, uber_scores$vPosTerms)
-
-# Format again
-colnames(grab)[13:16] <- c("vNegTerms", "negTerms", "posTerms", "vPosTerms") 
-colnames(uber)[13:16] <- c("vNegTerms", "negTerms", "posTerms", "vPosTerms") 
-
-# Save data
-write.csv(uber, file="uber_features.csv")
-write.csv(grab, file="grab_features.csv")
-
-# ---------------------------------------------------------------------------- #
-# NB model
-
-library(e1071)
-
-# Pos Neg feature -- found to be not effective
-# uber$net_score <- uber$vNegTerms*-5 + uber$negTerms*-2 + uber$posTerms*2 + uber$vPosTerms*5
-# grab$net_score <- grab$vNegTerms*-5 + grab$negTerms*-2 + grab$posTerms*2 + grab$vPosTerms*5
-
-# Extract posts with labels
-uber_lab <- uber[!is.na(uber$sentiment),] #n=1,391
-grab_lab <- grab[!is.na(grab$sentiment),] #n=1,237
-
-# Build naive bayes model -- note that it tests and trains on labelled data
-classifier_g <- naiveBayes(grab_lab[,c(11:12, 18)], grab_lab[,5])
-classifier_u <- naiveBayes(uber_lab[,c(11:12, 17)], uber_lab[,5])
-
-# Predict & print results
-predicted_g <- predict(classifier_g, grab_lab)
-predicted_u <- predict(classifier_u, uber_lab)
-
-results_g <- table(predicted_g, grab_lab[,5], dnn=list('predicted','actual'))
-results_u <- table(predicted_u, uber_lab[,5], dnn=list('predicted','actual'))
-
-# Binomial test for confidence intervals
-binom.test(results_g[1,1] + results_g[2,2]+ results_g[3,3], nrow(grab_lab), p=0.5)
-binom.test(results_u[1,1] + results_u[2,2]+ results_u[3,3], nrow(uber_lab), p=0.5)
-
-##################################
-#           results - Grab [wordcount, mean AFINN, sentimentR score] 
-# actual
-# predicted  negative neutral positive
-# negative       57      17        8
-# neutral       126     659      137
-# positive       24      40      169
-# 95 percent confidence interval: 0.6894006 0.7404522
-# sample estimates:
-#     probability of success 
-# 0.7154406 
-##################################
-#           results - Uber [wordcount, mean AFINN, sentimentR score] 
-# actual
-# predicted  negative neutral positive
-# negative      192      53       14
-# neutral       168     666      101
-# positive       16      75      106
-# 95 percent confidence interval: 0.6680392 0.7171959
-# sample estimates:
-#     probability of success 
-# 0.6930266 
-##################################
-
-# ---------------------------------------------------------------------------- #
-# SentimentR package
-
-library(sentimentr)
-mytext <- c(
-    'do you like it?  But I hate really bad dogs',
-    'I am the best friend.',
-    'Do you really like it?  I\'m not a fan'
-)
-mytext <- get_sentences(mytext)
-sentiment(mytext)
-
-# Single sentences
+# Separate out single sentences 
 grabtext <- get_sentences(grab$post_comment)
-grab_sr <- sentiment(grabtext)
 ubertext <- get_sentences(uber$post_comment)
+
+# Pass them one sentence at a time to function
+grab_sr <- sentiment(grabtext)
 uber_sr <- sentiment(ubertext)
 
 # Score by cell 
@@ -472,15 +318,16 @@ uber_sr <- uber_sr %>%
 colnames(uber_sr) <- c("post", "sentimentr")
 
 # Bind back to main frame
-grab <- cbind(grab, grab_sr$sentimentr)
-uber <- cbind(uber, uber_sr$sentimentr)
-
-# count score
-# neutral <- nrow(grab[grab$`out$sentimentr`==0,]) #1123 (35%)
-# positive <- nrow(grab[grab$`out$sentimentr`>0,]) #1394 (44%)
-# negative <- nrow(grab[grab$`out$sentimentr`<0,]) #665 (21%)
+grab <- cbind(grab, grab_sr$sentimentr); uber <- cbind(uber, uber_sr$sentimentr)
 colnames(grab)[18] <- "SentimentR"
 colnames(uber)[18] <- "SentimentR"
+
+```
+Results look like this:
+
+```
+# Independent samples two-tailed t-test
+t.test(uber$SentimentR, grab$SentimentR)
 
 # Test if score is correlated to AFINN dictionary
 x <- grab[,12] # Mean score for AFINN
@@ -491,82 +338,64 @@ a <- uber[,12] # Mean score for AFINN
 b <- uber[,18] # SentimentR score
 cor(a, b, use="complete.obs", method="pearson") # r = 0.410
 
-# ---------------------------------------------------------------------------- #
-# [ plot 6 - boxplot for SentimentR by sentence]
+```
+Sweet. There's a difference here too. It's interesting to note that they're not too strongly correlated with each other, in spite of measuring the same broad concept. 
 
-# Plot bar charts for SentimentR
-grab_boxplot2 <- grab %>%
+I'll plot the differences in scores of both companies with a graph:
+
+```
+# [plot 5 = boxplot for AFINN distribution]
+grab_boxplot <- grab %>%
     mutate(Month_num = month(DatetimeSG)) %>%
-    subset(select=c(Month_num, SentimentR)) %>%
+    subset(select=c(Month_num, AFINN)) %>%
     mutate(Company = "Grab")
-uber_boxplot2 <- uber %>%
+uber_boxplot <- uber %>%
     mutate(Month_num = month(DatetimeSG)) %>%
-    subset(select=c(Month_num, SentimentR)) %>%
+    subset(select=c(Month_num, AFINN)) %>%
     mutate(Company = "Uber")
 
-# Format decimal places, remove NAs
-boxplots2 <- rbind(grab_boxplot2, uber_boxplot2)
-boxplots2$SentimentR <- round(boxplots2$SentimentR, digits=2)
-boxplots2[is.na(boxplots2)] <- 0
+# Format decimal places, set NA to zero to maintain power
+boxplots <- rbind(grab_boxplot, uber_boxplot)
+boxplots$mean <- round(boxplots$mean, digits=2)
+boxplots[is.na(boxplots)] <- 0
 
-# Label month names
-# Labels <- data.frame(num = c(3:9), Date = c("Mar", "Apr", "May", "Jun","Jul", "Aug", "Sep"))
-boxplots2 <- left_join(boxplots2, Labels, by=c("Month_num" = "num")) 
+# Create nice labels for month names
+# Labels <- data.frame(num = c(3:9), Date = c("Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"))
+boxplots <- left_join(boxplots, Labels, by=c("Month_num" = "num")) 
 
-# Boxplot per month by score
-ggplot(data = boxplots2, aes(x=reorder(factor(Date), Month_num), y=SentimentR)) + 
-    geom_boxplot(aes(fill=Company)) + 
-    ggtitle("Distribution of Sentiment by Sentence", 
-            subtitle = "(Sentiment analysis through SentimentR pkg, based on public data from Facebook)") +
-    xlab(NULL) +
-    scale_y_continuous(name = "SR score (neg=rude, pos=polite)",
-                       breaks = seq(-1, 1, 0.2),
-                       limits=c(-1, 1)) + 
-    scale_fill_brewer(palette = "Pastel2") +
+# Boxplot per month by AFINN score
+ggplot(data = boxplots, aes(x=reorder(factor(Date), Month_num), y=mean)) + 
+    geom_boxplot(aes(fill=Company)) + xlab(NULL) + 
+    scale_y_continuous(name = "AFINN score (neg=rude, pos=polite)", breaks = seq(-5, 5, 1.0), limits=c(-5, 5)) + 
+    ggtitle("Distribution of Sentiment by Word", subtitle = "(Sentiment analysis through AFINN dictionary, 
+    based on public data from Facebook)") +
+    scale_fill_brewer(palette = "Accent") +
     theme(plot.title = element_text(family="Tahoma", face="bold", size=15),
           plot.subtitle = element_text(face="italic",size=6),
-          legend.title = element_text(face="italic",size=6),
-          legend.position = "bottom", 
-          legend.box = "horizontal",
-          legend.box.just="left",
-          legend.key.size = unit(0.5, "cm"),
-          legend.text = element_text(face="bold",size = 6),
+          legend.title = element_text(face="italic",size=6), legend.position = "bottom", legend.box = "horizontal",
+          legend.box.just="left", legend.key.size = unit(0.5, "cm"), legend.text = element_text(face="bold",size = 6),
           axis.title = element_text(size=9)) 
+          
+### Repeat the exact same steps for making SENTIMENTR plot
+```
+GRAPH HERE AFINN
+GRAPH HERE SENTIMENTR
 
-# ---------------------------------------------------------------------------- #
-# Apply labels to unlabelled data
-
-# Load unlabelled data 
-unlab_u <- dplyr::filter(uber, is.na(sentiment)) # n=1768
-unlab_g <- dplyr::filter(grab, is.na(sentiment)) # n=1945
+This is getting pretty exciting. Moving forward, I'll keep these features for use in the machine. I use almost the exact same syntax as before so I won't reprint it here. The results look like this:  
+```
+FINAL NB SCORES
+```
+I'll apply this same algorithm to the remaining unlabelled data. A note - this classifier isn't perfect (~70%). However, one good thing remains: it skews classification the same way for both datasets. Meaning, if it tends to classify Uber's posts as negative, it would classify Grab's posts as negative by the same degree too.
+```
+# Load remaining unlabelled data 
+unlab_u <- dplyr::filter(uber, is.na(sentiment)); unlab_g <- dplyr::filter(grab, is.na(sentiment)) 
 
 # Predict sentiments using nb model 
-predicted_unlab_g <- predict(classifier_g, unlab_g)
-predicted_unlab_u <- predict(classifier_u, unlab_u)
+predicted_unlab_g <- predict(classifier_g, unlab_g); predicted_unlab_u <- predict(classifier_u, unlab_u)
 
-# Merge prediction sentiments into one table
+# Attach prediction labels
 unlab_g <- cbind(unlab_g, as.data.frame(predicted_unlab_g))
 unlab_u <- cbind(unlab_u, as.data.frame(predicted_unlab_u))
-
-# Check distribution
-t <- unlab_u %>%
-    dplyr::count(predicted_unlab_u)
-t <- unlab_g %>%
-    dplyr::count(predicted_unlab_g)
-
-# A tibble: 3 x 2
-# predicted_unlab_UBER     n
-# <fctr> <int>
-# 1          negative   281
-# 2           neutral  1162
-# 3          positive   325
-
-# A tibble: 3 x 2
-# predicted_unlab_GRAB     n
-# <fctr> <int>
-# 1          negative    60
-# 2           neutral  1728
-# 3          positive   157
 
 # Merge prediction sentiments back with main dataset
 unlab_g <- subset(unlab_g, select = -c(sentiment))
@@ -582,11 +411,33 @@ grab <- mutate(grab, Type="manual"); uber <- mutate(uber, Type="manual")
 # Merge
 grab_final <- rbind(grab_lab, unlab_g)
 uber_final <- rbind(uber_lab, unlab_u)
+```
+Let's check the distribution of predictions. 
+```
+t <- unlab_u %>%
+    dplyr::count(predicted_unlab_u)
 
-# Save data
-write.csv(uber_final, file="uber_final.csv")
-write.csv(grab_final, file="grab_final.csv")
+# A tibble: 3 x 2
+# predicted_unlab_UBER     n
+# <fctr> <int>
+# 1          negative   281
+# 2           neutral  1162
+# 3          positive   325
 
+t <- unlab_g %>%
+    dplyr::count(predicted_unlab_g)
+
+# A tibble: 3 x 2
+# predicted_unlab_GRAB     n
+# <fctr> <int>
+# 1          negative    60
+# 2           neutral  1728
+# 3          positive   157
+```
+I guess they both skew towards `neutral` when in doubt. 
+
+With these results, I'll make two final graphs of words. 
+```
 # ---------------------------------------------------------------------------- #
 # [plot 8 = plot of most frequent words per company x sentiment] 
 
@@ -794,109 +645,3 @@ multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
     }
 }
 multiplot(grpos, ubpos, grneg, ubneg, cols=2)
-
-# Select only top words, non-NA words
-# c_words4 <- c_words3 %>%
-#     group_by(sentiment, Company) %>%
-#     top_n(n = 5, wt = num_words)
-# c_words4 <- c_words4[!is.na(c_words4$sentiment),]
-
-# Old plot
-# grab_w <- grab_words %>% 
-#     dplyr::group_by(words) %>% 
-#     dplyr::summarise(n = n()) %>%
-#     arrange(desc(n))
-
-# Plot top words per brand
-# uber_tw <- uber_w[1:9,]
-# grab_tw <- grab_w[1:9,]
-# ggplot(uber_tw, aes(x=reorder(words, n), y=n, fill=factor(n))) + geom_bar(stat="identity") +
-#     ylab("Popularity of words, Uber") + xlab("Words") + 
-#     theme(legend.position = "none") + coord_flip() + 
-#     scale_fill_brewer(palette="Greys")
-# ggplot(grab_tw, aes(x=reorder(words, n), y=n, fill=factor(n))) + geom_bar(stat="identity") +
-#     ylab("Popularity of words, Grab") + xlab("Words") + 
-#     theme(legend.position = "none") + coord_flip() + 
-#     scale_fill_brewer(palette="Greens")
-
-
-# ---------------------------------------------------------------------------- #
-# Depreciated: Only able to produce two-level outputs
-
-library(RTextTools)
-
-# Shuffle order of rows to distribute positive, negative posts thru dataset
-labelled_data <- labelled_data[sample(nrow(labelled_data)),]
-
-# New dataframe of columns to be used
-labelled_data1 <- subset(labelled_data, select = c(1:5, 8, 10))
-View(labelled_data1)
-
-# Build DTM for other models
-matrix_uber <- create_matrix(labelled_data1[,1:7], language="english",
-                             removeStopwords = FALSE, removeNumbers = TRUE,
-                             stemWords = FALSE)
-mat_uber <- as.matrix(matrix_uber)
-
-# Build container to specify response input var, test set & training set
-container_uber <- create_container(matrix_uber, 
-                                   as.numeric(as.factor(labelled_data[,9])),
-                                   trainSize=1:1000, testSize=1001:1519, # 75%
-                                   virgin=FALSE)
-
-
-# Train model with multiple ML Algos
-models_all <- train_models(container_uber, 
-                           algorithms=c("MAXENT" , "SVM", "RF", "BAGGING", "TREE"))
-
-# Classify training set
-results_all <- classify_models(container_uber, models_all)
-
-# accuracy table
-table(as.numeric(labelled_data[1001:1519, 9]), results_all[,"FORESTS_LABEL"])
-table(as.numeric(as.factor(labelled_data[1001:1519, 9])), results_all[,"MAXENTROPY_LABEL"])
-
-# recall accuracy
-recall_accuracy(as.numeric(as.factor(labelled_data[1:666, 9])), results_all[,"FORESTS_LABEL"])
-recall_accuracy(as.numeric(as.factor(labelled_data[1:666, 9])), results_all[,"MAXENTROPY_LABEL"])
-recall_accuracy(as.numeric(as.factor(labelled_data[1:666, 9])), results_all[,"TREE_LABEL"])
-recall_accuracy(as.numeric(as.factor(labelled_data[1:666, 9])), results_all[,"BAGGING_LABEL"])
-recall_accuracy(as.numeric(as.factor(labelled_data[1:666, 9])), results_all[,"SVM_LABEL"])
-
-# To summarize the results (especially the validity) in a formal way:
-analytics <- create_analytics(container_uber, results_all)
-summary(analytics)
-head(analytics@document_summary)
-analytics@ensemble_summary
-
-# Cross validate with out of sample estimates of k-folds
-N=5
-set.seed(2014)
-cross_validate(container_uber,N,"MAXENT")
-cross_validate(container_uber,N,"TREE")
-cross_validate(container_uber,N,"SVM")
-cross_validate(container_uber,N,"RF")
-
-# ---------------------------------------------------------------------------- #
-# Depreciated: Maxent does not work for multilevel modelling; measures presence-only data
-
-# LOAD LIBRARY
-library(maxent)
-
-# READ THE DATA, PREPARE THE CORPUS, and CREATE THE MATRIX
-data <- read.csv(system.file("data/NYTimes.csv.gz",package="maxent"))
-corpus <- Corpus(VectorSource(data[1:150,]))
-matrix <- DocumentTermMatrix(corpus)
-
-# TRAIN/PREDICT USING SPARSEM REPRESENTATION
-sparse <- as.compressed.matrix(matrix)
-model <- maxent(sparse[1:100,],data$Topic.Code[1:100,])
-results <- predict(model,sparse[101:150,])
-
-# PRINT RESULTS
-results <- cbind(as.data.frame(results), True = data[101:150,5])
-correct_preds <- nrow(results[results$labels==results$True,])
-num_preds <- nrow(results)
-accuracy <- paste0("Accuracy of Max_Ent machine with n=", num_preds,
-                   " data points: ", (correct_preds/num_preds)*100, "%");accuracy
-
