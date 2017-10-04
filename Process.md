@@ -3,12 +3,12 @@
 ### Background
 
 Grab and Uber are competing pretty hard for the local market right now. After 
-Travis' controversies started in Feb 2017, I noticed some friends around me grew polarised towards one company or the other. 
+Travis' controversies started in Feb 2017, I noticed some friends grew polarised towards one company or the other. 
 I wondered if the company's negative press image would affect the way other customers felt towards the brand as well. 
 
 This post outlines the process I used to mine public data using R and the Facebook Graph API for Uber and Grab. 
 I then built a `naive bayes` sentiment classifier to label the data and visualised the results below. All in all,
-I'm looking to see if there is a difference in the way people talk about/to Grab and Uber. 
+I'm looking to see if there is a difference in the way people talk and feel toward Grab and Uber. 
 
 **Quick outline of workflow:**
 
@@ -20,214 +20,256 @@ I'm looking to see if there is a difference in the way people talk about/to Grab
 
 ### Mining Facebook Data with R 
 
-I chose Facebook as it has the platform with highest social activity for the brands, compared to Twitter or Instagram.
-Setting up the API took less than 5 minutes. I made an app, used the `RFacebook` package found 
-[here](https://cran.r-project.org/web/packages/Rfacebook/Rfacebook.pdf) and copied my authentication key from
-the developer's settings page.
+I chose to mine data from Facebook as it has the highest social activity for both brands, compared to Twitter or Instagram.
+Setting up the API took less than 5 minutes. From my Facebook account, I made an app, and copied my authentication key from
+the app's [settings page](https://developers.facebook.com/tools/accesstoken/). I then set up the API authentication in R below. 
+Detailed Facebook API set-up instructions can be found [here](http://thinktostart.com/analyzing-facebook-with-r/) or on the [Rfacebook documentation](https://cran.r-project.org/web/packages/Rfacebook/Rfacebook.pdf).
 
 ```R 
 library(RFacebook)
 
 # Get your own key from facebook
-app_id <- "ABCDEFGHIJK...Z"
-app_secret <- "ABCDEFGHIJK...Z"
+app_id <- "XXX"
+app_secret <- "XXX"
 
 # Authenticate
-fbOAuth(app_id, app_secret, extended_permissions = FALSE,
+fb_oauth <- fbOAuth(app_id, app_secret, extended_permissions = FALSE,
 legacy_permissions = FALSE, scope = NULL)
+save(fb_oauth, file="fb_oauth"); load("fb_oauth")
 ```
-From here, I decided to mine all public comments for the last 6 months, from 01 March 2017 to 31 August 2017. I kept only the *parent* comment in each thread as child comments tend to be the respective customer support staff replying to users' needs. 
+`RFacebook` allows pulling of all post data from specific pages using `getPage`, or through a custom URL, with `callAPI`. Facebook also has a [neat interface](https://developers.facebook.com/tools/explorer/145634995501895/) to pull more specific data into a JSON file. Your preference. 
+
+From here, I decided to mine all public comments for the last 6 months, from 01 March 2017 to 31 August 2017. I kept only the *parent* comment in each thread as child comments tend to be the respective customer support staff replying to users' questions. 
 
 ```R
-# Call Graph API for posts
-# Note: I'm using API v.2.10 but you can leave it as NULL if errors occur
-uber <- callAPI(url, token, api = 2.10)
-grab <- callAPI(url, token, api = 2.10)
+# Example: Not run
+fb_grab_page_posts <- getPage(page="grab", token = fb_oauth, n = 5000, feed = TRUE,
+                   since='2017/02/27', until='2017/09/01', # Extract more to buffer for timezone conversion
+        reactions = FALSE, verbose = TRUE, api = "v2.10")
+        
+# Call Graph API for all comments. Note: Max limit n = 100 comments at a time. 
+fb_grab_all_comments <- callAPI("https://graph.facebook.com/v2.10/grab?fields=posts.limit(100){comments}", 
+        token = fb_oauth, api = "v2.10")
+fb_uber_all_comments <- callAPI("https://graph.facebook.com/v2.10/grab?fields=posts.limit(100){comments}", 
+        token = fb_oauth, api = "v2.10")
+options(stringsAsFactors = FALSE)
 
-# Data retrieved as JSON, convert to dataframe for working
-uber <- as.data.frame(uber)
-grab <- as.data.frame(grab)
+# Combine dataframes
+names(uber) <- c("DatetimeGMT", "post_username", "post_ID", "post_comment", "message_ID")
+names(grab) <- c("DatetimeGMT", "post_username", "post_ID", "post_comment", "message_ID")
+uber <- mutate(uber, Company="uber"); 
+grab <- mutate(grab, Company="grab")
+data <- rbind(uber, grab)
 
-# A tibble:
-[preview data]
+# Format for consistency
+data <- transform(data, DatetimeGMT = as.character(DatetimeGMT), 
+                  post_username = as.character(post_username),
+                  post_ID = as.character(post_ID), 
+                  post_comment = as.character(post_comment),
+                  message_ID = as.character(message_ID)); str(data)
 ```
-This returns `3182` comments for Grab and `3195` for Uber.
+
+This returns just under `6500` comments for both Grab and Uber.
 
 ### Cleaning the data
 
-First off, I cleaned up the date column. Data was stored in USA time (UTC -8:00) so I need to convert it to Singapore Time (SGT +8:00). I wrote a function `format_FBtime` to do this so I could reuse it on subsequent analyses. This simple function requires the date column to be in string format, and titled `creation_time` (which it is, by default). It returns 2 columns to work with: (1) Original date time (USA) (2) Converted date time (SG).
+First off, I cleaned up the date column. Data was stored in GMT time (UTC -8:00) so I converted it to Singapore Time (SGT +8:00). I wrote a function `format_FBtime` to do this so I could reuse it on subsequent analyses. This simple function requires the date column to be in string format. It returns the converted `DatetimeSG` in Date format.
 
 ```R
-library(dplyr)
 library(lubridate)
+library(dplyr)
 
-format_FBtime <- function(df){ 
-    
-    # What this function needs:
-    # 1. Datetime column in CHAR format titled "creation_time"
-    
-    # What this function returns: 
-    # 1. "DatetimeSF" in DATE format (UTC -8:00) as YYYY-MM-DD HH:MM:SS 
-    # 2. "DatetimeSG" in DATE format (SGT +8:00) as YYYY-MM-DD HH:MM:SS 
-    # 3. Drops unformatted column "creation_time"
-    
-    df <- mutate(df, Date = paste(year(df$creation_time), month(df$creation_time), day(df$creation_time), sep="-"))
-    df <- mutate(df, Time=substr(as.character(df$creation_time),12, 19))
-    df <- mutate(df, DatetimeSF = paste(df$Date, df$Time))
-    df$DatetimeSF <- as.POSIXct(strptime(df$DatetimeSF, "%Y-%m-%d %H:%M:%S", tz="Pacific/Easter"))
-    df <- mutate(df, DatetimeSG = with_tz(df$DatetimeSF, "Singapore"))
-    
-    # Remove any unwanted columns here:
-    df <- subset(df, select = -c(Date, Time, creation_time))
+format_FBtime <- function(df) {
+    df$DatetimeGMT <- as.POSIXct(df$DatetimeGMT, format = "%Y-%m-%dT%H:%M:%S+0000", tz = "GMT")
+    df$DatetimeSG <- with_tz(df$DatetimeGMT, "Singapore")
+    df <- subset(df, select= -c(DatetimeGMT))
     return(df)
 }
 
-grab <- format_FBtime(grab); str(grab)
-uber <- format_FBtime(uber); str(uber)
+# Apply
+data <- format_FBtime(data); str(data)
+
+# Select only data from March to Aug 2017 after changing timezones
+data <- data[data$DatetimeSG >= as.Date("010317", "%d%m%y") &
+                 data$DatetimeSG < as.Date("010917", "%d%m%y"), ] 
+
 ```
-Next, I'll do a simple visualisation of the data to check the number of posts per day for both companies, and see if there are any trends in comments by `month`, `day of week` or `hour` the comment was posted. 
+Next, I'll do a visualisation of the data to see if the number of posts per day for both companies, and see if there are any trends in comments by `month`, `week`, `day of week` or `hour` the comment was posted. 
 ```R
-# Plot 1: Group by number of posts per company per day
-grab1 <- grab %>% 
-    dplyr::group_by(DateSG) %>% 
-    dplyr::summarise(n = n()) 
-uber1 <- uber %>% 
-    dplyr::group_by(DateSG) %>% 
-    dplyr::summarise(n = n()) 
-colnames(grab1)[2] = "Grab"; colnames(uber1)[2] = "Uber"
-timeseries <- left_join(grab1, uber1, by=c("DateSG"="DateSG"))
-timeseries[is.na(timeseries)] <- 0
-timeseries <- transform(timeseries, 
-              Date = as.POSIXct(strptime(timeseries$DateSG, "%Y-%m-%d", tz="Singapore")),
-              Grab = as.numeric(Grab), Uber = as.numeric(Uber))
-              
-### EDIT THIS TO CHECK FOR NUM POSTS PER WEEKDAY, HOUR.
-```
-Plot this out: 
-```
-library(ggplot2)
-library(ggthemes)
-library(grid)
+# Comments by Week
+data1 <- data %>% 
+    dplyr::group_by(week = week(DatetimeSG), Company) %>% 
+    dplyr::summarise(num_comments = n()) 
 
-# [ Plot 1 = num posts per day as timeseries line graph]
-ggplot(timeseries, aes(as.Date(DateSG))) + 
-    geom_line(aes(y = Uber, color="Uber"), size= 0.75, colour="black") + 
-    geom_line(aes(y = Grab, color="Grab"), size= 0.75, colour="forest green") + 
-    labs(colour="Company", x=NULL, y="Number of Comments") +
-    scale_x_date(date_breaks = "1 month", date_labels = "%b") + 
-    ggtitle("Total Comments per Day, Grab & Uber", subtitle = "(based on public data from Facebook)") +
-    theme(plot.title = element_text(family="Tahoma", face="bold", size=15), plot.subtitle = element_text(face="italic",size=6),
-          legend.box = "horizontal", legend.box.just="left", legend.key.size = unit(0.5, "cm"), 
-          legend.text = element_text(face="bold",size = 6), legend.position = "bottom",
-          axis.title = element_text(size=9))
+# Comments by DAY
+data1 <- data %>% 
+    dplyr::group_by(week = week(DatetimeSG), Company) %>% 
+    dplyr::summarise(num_comments = n()) 
+
+plot1 <- ggplot(data1, aes(x=week, y=num_comments)) +
+    geom_bar(stat = "identity", aes(fill = num_comments)) + facet_grid(. ~ Company) + 
+    labs(colour="Company", x="Date by weeks", y=NULL) + 
+    ggtitle("Total Comments per Week", subtitle = "(based on public data from Facebook)") +
+    theme(plot.title = element_text(face="bold", size=15), plot.subtitle = element_text(face="italic",size=6),
+          legend.box = "horizontal", legend.box.just="left", legend.key.size = unit(0.5, "cm"),
+          legend.text = element_text(face="bold",size = 6), legend.position = "none",
+          strip.text=element_text(face="bold", size=9), axis.title = element_text(size=9))
+
+# Comments by MONTH
+data2 <- data %>% 
+    dplyr::group_by(Month = month(DatetimeSG), Company) %>% 
+    dplyr::summarise(num_comments = n()) 
+
+Labels <- data.frame(num = c(3:9), Date = c("Mar", "Apr", "May", "Jun","Jul", "Aug", "Sep"))
+data2 <- left_join(data2, Labels, by=c("Month" = "num"))    
+
+plot2 <- ggplot(data2, aes(x=reorder(Date, Month), y=num_comments)) +
+    geom_bar(stat = "identity", aes(fill = num_comments)) + facet_grid(. ~ Company) + 
+    labs(colour="Company", x="Date by Month", y=NULL) + scale_x_discrete(name = "Month", labels=abbreviate) +
+    ggtitle("Total Comments per Month", subtitle = "(based on public data from Facebook)") +
+    theme(plot.title = element_text(face="bold", size=15), plot.subtitle = element_text(face="italic",size=6),
+          legend.box = "horizontal", legend.box.just="left", legend.key.size = unit(0.5, "cm"),
+          legend.text = element_text(face="bold",size = 6), legend.position = "none",
+          strip.text=element_text(face="bold", size=9), axis.title = element_text(size=9))
+
+# Comments by weekday
+data3 <- data %>% 
+    dplyr::group_by(Dayofweek, Company) %>% 
+    dplyr::summarise(num_comments = n()) 
+data3 <- left_join(data3, Labels, by=c("Dayofweek" = "num"))
+
+plot3 <- ggplot(data3, aes(x=reorder(Date, Dayofweek), y=num_comments)) +
+    geom_bar(stat = "identity", aes(fill = num_comments)) + labs(colour="Company", y=NULL) + 
+    scale_x_discrete(name = "Day of Week", labels=abbreviate) + facet_grid(. ~ Company) +
+    ggtitle("Total Comments per Day of Week", subtitle = "(based on public data from Facebook)") +
+    theme(plot.title = element_text(face="bold", size=15),  plot.subtitle = element_text(face="italic",size=6),
+          legend.box = "horizontal", legend.box.just="left", legend.key.size = unit(0.5, "cm"),
+          legend.text = element_text(face="bold",size = 6), legend.position = "none",
+          strip.text=element_text(face="bold", size=9), axis.title = element_text(size=9))
+
+# Comments by hour of day
+data4 <- data %>% 
+    dplyr::group_by(Hour, Company) %>% 
+    dplyr::summarise(num_comments = n()) 
+
+plot4 <- ggplot(data4, aes(x=Hour, y=num_comments)) +
+    geom_bar(stat = "identity", aes(fill = num_comments)) + facet_grid(. ~ Company) + 
+    labs(colour="Company", x= "Hour of Day, Midnight to Midnight", y=NULL) + 
+    ggtitle("Total Comments per Hour", subtitle = "(based on public data from Facebook, 24:00 clock)") +
+    theme(plot.title = element_text(face="bold", size=15), plot.subtitle = element_text(face="italic",size=6),
+          legend.box = "horizontal", legend.box.just="left", legend.key.size = unit(0.5, "cm"),
+          legend.text = element_text(face="bold",size = 6), legend.position = "none",
+          strip.text=element_text(face="bold", size=9), axis.title = element_text(size=9))
+          
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+    library(grid)
+    # Ref: http://www.cookbook-r.com/Graphs/Multiple_graphs_on_one_page_(ggplot2)/
+    plots <- c(list(...), plotlist)
+    numPlots = length(plots)
+    if (is.null(layout)) {
+        layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                         ncol = cols, nrow = ceiling(numPlots/cols))
+    }
+    if (numPlots==1) {
+        print(plots[[1]])
+    } else {
+        grid.newpage()
+        pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+        for (i in 1:numPlots) {
+            # Get the i,j matrix positions of the regions that contain this subplot
+            matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+            print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                            layout.pos.col = matchidx$col))
+        }
+    }
+}
+
+multiplot(plot1, plot2, plot3, plot4, cols=2)
 ```
-GRAPH HERE
-```
-# [plot 2 = num posts per day per company as back-to-back histogram]
-colnames(grab1)[2] = "Num_comments"; colnames(uber1)[2] = "Num_comments"
-uber1 <- mutate(uber1, Company='Uber'); grab1 <- mutate(grab1, Company='Grab', Num_comments=Num_comments*-1)
-timeseries2 <- rbind(uber1, grab1) %>%
-    transform(DateSG = as.Date(DateSG)) 
+![Imgur](https://i.imgur.com/ckykcVm.png)
 
-# Uber (right side)
-plot_uber <- ggplot(timeseries2, aes(x=DateSG)) + 
-    geom_bar(data = subset(timeseries2, Company == 'Uber'), aes(y=Num_comments, fill = Num_comments), 
-    colour="black", stat = "identity") + scale_x_date(date_breaks = "1 month", date_labels = "%b")
+Doesn't seem to be any major differences in number of comments per month, although I note that there's a slight increase in comments in *May* due to *Uber* hosting more giveaways on their page. There's an interesting curve in the popularity of `Days of Week` where Uber gets more comments on weekends while Grab gets them on weekdays. 
 
-# Grab (left side)
-print(plot_uber + geom_bar(data = subset(timeseries2, Company == 'Grab'), 
-             aes(y= Num_comments, fill = Num_comments), colour="dark green", stat = 'identity') +
-    scale_y_continuous(breaks= seq(-75, 75, 25), limits = c(-75, 75), position = "right", name = "Grab  - - -  Uber") + 
-    xlab("") + scale_fill_gradient2(low ="forest green", mid = "white", high = "black", midpoint = 0, space = "rgb") +
-        theme(legend.position = "none") + coord_flip())
-```
-GRAPH HERE
-
-Doesn't seem to be any major differences in number of comments per month, although I note that there's a slight increase in comments in ______ month due to ______ hosting X promos. That aside, there isn't any particular surge in number of posts by weekday or hour either. 
-
-Finally, I make a simple column to count the number of words per comment. Just in case, y'know, angry comments tend to be longer or something. 
+Next, I added a simple column to count the number of words per comment. 
 ```
 # Remove non-ASCII characters in comments, usernames
-uber$post_comment <- gsub("[^0-9A-Za-z\\\',!?:;.-_@#$%^&*()\" ]", "", uber$post_comment)
-uber$post_username <- gsub("[^0-9A-Za-z\\\',!?:;.-_@#$%^&*()\" ]", "", uber$post_username)
-grab$post_comment <- gsub("[^0-9A-Za-z\\\',!?:;.-_@#$%^&*()\" ]", "", grab$post_comment)
-grab$post_username <- gsub("[^0-9A-Za-z\\\',!?:;.-_@#$%^&*()\" ]", "", grab$post_username)
+data$post_comment <- gsub("[^0-9A-Za-z\\\',!?:;.-_@#$%^&*()\" ]", "", data$post_comment)
+data$post_username <- gsub("[^0-9A-Za-z\\\',!?:;.-_@#$%^&*()\" ]", "", data$post_username)
 
 # Count words
-uber$wordcount <- str_count(uber$post_comment, '\\s+')+1
-grab$wordcount <- str_count(grab$post_comment, '\\s+')+1
-
+data$wordcount <- str_count(data$post_comment, '\\s+')+1
 ```
-I can't think of any (publicly available) features that might be correlated to the sentiment of comments for now, so I'll move on to sentiment analysis.
+I couldn't think of any (publicly available) features that might be correlated to the sentiment of comments for now, so I'll move on to sentiment analysis.
 
 ### Sentiment Analysis
 
-From the dataset, I manually tagged about 20% of the comments (1,200) with labels as `positive`, `neutral`, `negative` based on their tone. Although most comments were short (<2 sentences), this took about 4 hours. I noticed that most comments were complaints or queries, so I tried to ignore their content (mostly neutral or negative) and focused on their *tone* (which could still be positive - ie. a confused but still polite customer). 
+From the dataset, I manually tagged about 20% of the comments (1,200) with labels as `positive`, `neutral`, `negative`. Although most comments were short (<2 sentences), this took about 4 hours. I noticed that most comments were complaints or queries, so I tried to ignore their content (mostly neutral or negative) and focused on their *tone* (which could still be positive - ie. an unhappy but still polite customer). 
 
-Also, to get a baseline, I ran the pure comments data straight through the `naive bayes` machine from the `e1071` package without any support feature vectors. I'm aware that training and testing on the same dataset tends to lead to overfitting, but in this situation I just wanted to get a baseline estimate of how well the classifier would perform. 
+To get a baseline of how well the classifier would perform without support features, I ran the pure comments data straight through the `naive bayes` machine from the `e1071` package. I'm aware that training and testing on the same dataset tends to lead to overfitting, but in this situation I just wanted to get a baseline estimate of how well the classifier would perform. 
 
 ```
 library(e1071)
-# Extract only labelled posts
-uber_lab <- uber[!is.na(uber$sentiment),] #n=1,391
-grab_lab <- grab[!is.na(grab$sentiment),] #n=1,237
-
-# Build naive bayes model -- note that it tests and trains on same set of data
-classifier_g <- naiveBayes(grab_lab[,c(11:12, 18)], grab_lab[,5])
-classifier_u <- naiveBayes(uber_lab[,c(11:12, 17)], uber_lab[,5])
-
-# Predict & print results in table
-predicted_g <- predict(classifier_g, grab_lab)
-predicted_u <- predict(classifier_u, uber_lab)
-results_g <- table(predicted_g, grab_lab[,5], dnn=list('predicted','actual'))
-results_u <- table(predicted_u, uber_lab[,5], dnn=list('predicted','actual'))
-
-# Binomial test for confidence intervals
-binom.test(results_g[1,1] + results_g[2,2]+ results_g[3,3], nrow(grab_lab), p=0.5)
-binom.test(results_u[1,1] + results_u[2,2]+ results_u[3,3], nrow(uber_lab), p=0.5)
+data_lab <- data[!is.na(data$sentiment),] #n=2,636
+classifier_l <- naiveBayes(data_lab[,3], data_lab[,5])
+predicted_l <- predict(classifier_l, data_lab)
+results_l <- table(predicted_l, data_lab[,5], dnn=list('predicted','actual'))
+binom.test(results_l[1,1] + results_l[2,2]+ results_l[3,3], nrow(data_lab), p=0.5)
 ```
-The accuracy was really low - `41%`. 
+The classifier couldn't work (as expected).
 ```
-RESULTS OF JUST NB WITHOUT FEATURES:
+          actual
+predicted  negative neutral positive
+  negative        0       0        0
+  neutral       584    1516      536
+  positive        0       0        0
 ```
-Moving forward, I started building things to help the machine better detect sentiment. I came across [this post](here) by XXXXXXX detailing three sentiment dictionaries commonly used in classification: The AFINN, NRC and BING lists. I chose to use the AFINN dictionary as it dealt directly with sentiment rather than emotion, which is the focus of this project. 
-
-> The AFINN dictionary... (explanation here)
-
-Initially, I replicated Bromberg's method, but those features did not significantly increase the accuracy of prediction so I'll leave them out of my discussion. You can find the adapted workings in my [full R code](link) hosted on my github. The results looked like this:
-
+Including variables like `hour`, `day of week` and `wordcount` increased the accuracy by 5%:
 ```
-RESULTS WITH AFINN BROMBERG
+          actual
+predicted  negative neutral positive
+  negative      117      48       63
+  neutral       451    1453      450
+  positive       16      15       23
+probability of success: 0.6043247 
 ```
-Following, I modified the AFINN dictionary to include more local colour, and made a single feature to calculate the mean AFINN score of each comment rather than take an aggregated sum of scores. 
+I decided to make more features to improve the accuracy of the machine. I came across [this Tidytext post](https://rstudio-pubs-static.s3.amazonaws.com/236096_2ef4566f995e48c1964013310bf197f1.html) detailing three sentiment dictionaries commonly used in classification: The AFINN, NRC and BING. In summary:
 
+> [FINN](https://github.com/fnielsen/afinn)
+is a list of words available in English, Swedish and Danish that are rated with integers corresponding to how `positive` TO `negative`-ly valenced they are. The AFINN-111.txt version contains 2477 common words and phrases, ranging from `Very Negative` (rated -5, -4), `Negative` (-3, -2, -1), `Positive` (rated 1, 2, 3) or `Very Positive` (4, 5). This list includes common swear words and internet lexicon like "lol". 
+>
+> [BING](https://www.cs.uic.edu/~liub/FBS/sentiment-analysis.html#lexicon) is a dictionary by Prof Bing Liu where words are strictly sorted as either `positive` or `negative`. It has 4782 negative keywords and 2006 positive keywords. 
+>
+> The [NRC](http://saifmohammad.com/WebPages/NRC-Emotion-Lexicon.htm) is a large list by Saif Mohammad with over 14,000 words corresponding to eight basic emotions (anger, fear, anticipation, trust, surprise, sadness, joy, and disgust) and two sentiments (negative and positive). 
+
+I chose to use the AFINN dictionary as it offers a greatest range of sensitivity to sentiment, which I felt was more important than detecting emotion (which would likely be only anger / joy). 
 ```
-### Load AFINN dictionary
-
-# SetWD to home dir; stored files MUST be in [SENTIMENT_ANALYSIS] folder in there
+# Load word files 
 setwd("~/sentiment_analysis")
-afinn_list <- read.delim(file='AFINN-111.txt', header=FALSE, stringsAsFactors=FALSE)
-names(afinn_list) <- c('word', 'score')
+afinn_list <- read.delim(file='AFINN-111.txt', header=FALSE, stringsAsFactors=FALSE); names(afinn_list) <- c('word', 'score')
 afinn_list$word <- tolower(afinn_list$word)
+```
+I then modified the dictionary to include some local flavour and shorthand. I also removed some words like `charged` and `pay` which were rated as negative, but likely meant as neutral in the context of discussing taxi payments. 
+```
+# Remove topic-specific words
+afinn_list$score[afinn_list$word %in% c("charges", "charged", "pay", "like", "joke", "improvement")] <- 0
 
 # Check if word exists & return score: (reuse this)
 afinn_list$score[afinn_list$word=="YOURWORDHERE"]
 
-# Modify scores (for words already in AFINN)
+# Modify scores for words in AFINN
 afinn_list$score[afinn_list$word %in% c("best", "nice", "appreciation")] <- 4
-afinn_list$score[afinn_list$word %in% c("charges", "charged", "pay", "like", "joke", "improvement")] <- 0
 afinn_list$score[afinn_list$word %in% c("irresponsible", "whatever")] <- -1
-afinn_list$score[afinn_list$word %in% c("cheat", "cheated", "frustrated", "scam", "pathetic", "hopeless",
+afinn_list$score[afinn_list$word %in% c("cheat", "cheated", "frustrated", "scam", "pathetic", "hopeless", "lousy"
                                         "useless", "dishonest", "tricked", "waste", "gimmick", "liar", "lied")] <- -4
-
+                                        
 # Add scores (for words not in AFINN)
-pos4 <- data.frame(word = c("bagus", "yay", ":)", "kindly", "^^", "yay", "swee", "awesome", "polite", "thnks", "thnk", "thx", "thankyou",
-                            "tq", "ty", "professional", "pls"), score = 4)
-pos2 <- data.frame(word = c("jiayou", "assist", "amin", "amen", "supper", "dating", "arigato", "bro"), score = 2)
+pos4 <- data.frame(word = c("bagus", "yay", ":)", "kindly", "^^", "yay", "swee", "awesome", "polite", 
+                            "professional", "thnks", "thnk", "thx", "thankyou","tq", "ty", "pls"), score = 4)
+pos2 <- data.frame(word = c("jiayou", "assist", "amin", "amen", "arigato", "well", "bro"), score = 2)
 pos1 <- data.frame(word = c("hi", "dear", "hello"), score = 1)
 neg1 <- data.frame(word = c("silly", "dafaq", "dafuq", "cringe", "picky"), score = -1)
-neg2 <- data.frame(word = c("jialat", "waited", "waiting", "rubbish", "lousy", "siao", "??", "-_-", "-.-", "slap", "slapped", "sicko",
-                            "lying", "lies", "wtf", "wts"), score = -2)
+neg2 <- data.frame(word = c("jialat", "waited", "waiting", "rubbish", "lousy", "siao", "??", "-_-", "-.-", 
+                            "lying", "lies", "wtf", "wts", "sicko", "slap", "slapped"), score = -2)
 neg4 <- data.frame(word = c("freaking", "knn", "ccb", "fk", "fking", "moronic"), score = -4)
 
 # Merge changes with main AFINN list
@@ -236,6 +278,7 @@ afinn_list <- rbind(afinn_list, pos4, pos2, pos1, neg1, neg2, neg4)
 *Note: I don't relaly have an objective basis for why some swear words get a higher rating
 than others, but I classified them by how angry my mother would be when I say them.*
 
+With this dictionary, I could calculate the average sentiment for each comment *based on their net
 Count sentiment per comment based on net word score:
 
 ```
