@@ -12,18 +12,19 @@ I'm looking to see if there is a difference in the way people talk and feel towa
 
 **Quick outline of workflow:**
 
-* Set up Facebook API 
+* Collect data from Facebook API 
 * Clean data
 * Build features for machine learning
-* Set up algorithms to label the rest
+* Label some data for training & testing
+* Evaluate & modify features if necessary
+* Deploy(?) final model on unlabelled data
 * Visualise results
 
-### Mining Facebook Data with R 
+### Mining Data from Facebook API with R 
 
-I chose to mine data from Facebook as it has the highest social activity for both brands, compared to Twitter or Instagram.
-Setting up the API took less than 5 minutes. From my Facebook account, I made an app, and copied my authentication key from
-the app's [settings page](https://developers.facebook.com/tools/accesstoken/). I then set up the API authentication in R below. 
-Detailed Facebook API set-up instructions can be found [here](http://thinktostart.com/analyzing-facebook-with-r/) or on the [Rfacebook documentation](https://cran.r-project.org/web/packages/Rfacebook/Rfacebook.pdf).
+I chose to mine data from Facebook as it is the platform with the highest social activity for both brands, compared to Twitter or Instagram.
+
+Setting up the API authentication took less than 5 minutes. From my Facebook account, I made a simple developer's app, and copied my authentication key from the app's [settings](https://developers.facebook.com/tools/accesstoken/). I then set up the API authentication in R below. Detailed Facebook API set-up instructions can be found [in this tutorial](http://thinktostart.com/analyzing-facebook-with-r/) or on the [Rfacebook documentation](https://cran.r-project.org/web/packages/Rfacebook/Rfacebook.pdf).
 
 ```R 
 library(RFacebook)
@@ -37,15 +38,15 @@ fb_oauth <- fbOAuth(app_id, app_secret, extended_permissions = FALSE,
 legacy_permissions = FALSE, scope = NULL)
 save(fb_oauth, file="fb_oauth"); load("fb_oauth")
 ```
-`RFacebook` allows pulling of all post data from specific pages using `getPage`, or through a custom URL, with `callAPI`. Facebook also has a [neat interface](https://developers.facebook.com/tools/explorer/145634995501895/) to pull more specific data into a JSON file. Your preference. 
+`RFacebook` allows mining of post data from singular pages using `getPage`, or through a custom URL using `callAPI`. Facebook also has a [neat interface](https://developers.facebook.com/tools/explorer/145634995501895/) to pull more specific data like comments, likes, (public) users info into a JSON file. I tried both and find the interface smoother, but it's up to personal preference. 
 
-From here, I decided to mine all public comments for the last 6 months, from 01 March 2017 to 31 August 2017. I kept only the *parent* comment in each thread as child comments tend to be the respective customer support staff replying to users' questions. 
+I decided to mine all public comments for the last 6 months, from 01 March 2017 to 31 August 2017. I only kept the *parent* comment in each thread as child comments tend to be the respective customer support staff replying to users' questions, which isn't what I'm looking for. 
 
 ```R
-# Example: Not run
-fb_grab_page_posts <- getPage(page="grab", token = fb_oauth, n = 5000, feed = TRUE,
-                   since='2017/02/27', until='2017/09/01', # Extract more to buffer for timezone conversion
-        reactions = FALSE, verbose = TRUE, api = "v2.10")
+# Example for using Rfacebook: Not run
+# fb_grab_page_posts <- getPage(page="grab", token = fb_oauth, n = 5000, feed = TRUE,
+#                    since='2017/02/27', until='2017/09/01', # Extract more to buffer for timezone conversion
+#         reactions = FALSE, verbose = TRUE, api = "v2.10")
         
 # Call Graph API for all comments. Note: Max limit n = 100 comments at a time. 
 fb_grab_all_comments <- callAPI("https://graph.facebook.com/v2.10/grab?fields=posts.limit(100){comments}", 
@@ -55,10 +56,10 @@ fb_uber_all_comments <- callAPI("https://graph.facebook.com/v2.10/grab?fields=po
 options(stringsAsFactors = FALSE)
 
 # Combine dataframes
-names(uber) <- c("DatetimeGMT", "post_username", "post_ID", "post_comment", "message_ID")
-names(grab) <- c("DatetimeGMT", "post_username", "post_ID", "post_comment", "message_ID")
-uber <- mutate(uber, Company="uber"); 
-grab <- mutate(grab, Company="grab")
+names(fb_grab_all_comments) <- c("DatetimeGMT", "post_username", "post_ID", "post_comment", "message_ID")
+names(fb_uber_all_comments) <- c("DatetimeGMT", "post_username", "post_ID", "post_comment", "message_ID")
+uber <- mutate(fb_uber_all_comments, Company="uber"); 
+grab <- mutate(fb_grab_all_comments, Company="grab")
 data <- rbind(uber, grab)
 
 # Format for consistency
@@ -191,7 +192,7 @@ multiplot(plot1, plot2, plot3, plot4, cols=2)
 Doesn't seem to be any major differences in number of comments per month, although I note that there's a slight increase in comments in *May* due to *Uber* hosting more giveaways on their page. There's an interesting curve in the popularity of `Days of Week` where Uber gets more comments on weekends while Grab gets them on weekdays. 
 
 Next, I added a simple column to count the number of words per comment. 
-```
+```R
 # Remove non-ASCII characters in comments, usernames
 data$post_comment <- gsub("[^0-9A-Za-z\\\',!?:;.-_@#$%^&*()\" ]", "", data$post_comment)
 data$post_username <- gsub("[^0-9A-Za-z\\\',!?:;.-_@#$%^&*()\" ]", "", data$post_username)
@@ -199,15 +200,15 @@ data$post_username <- gsub("[^0-9A-Za-z\\\',!?:;.-_@#$%^&*()\" ]", "", data$post
 # Count words
 data$wordcount <- str_count(data$post_comment, '\\s+')+1
 ```
-I couldn't think of any (publicly available) features that might be correlated to the sentiment of comments for now, so I'll move on to sentiment analysis.
+I can't access data on users' age, country or even gender, so there isn't much else to form. I couldn't think of any (publicly available) features that might be correlated to the sentiment of comments for now, so I'll move on to sentiment analysis. 
 
 ### Sentiment Analysis
 
-From the dataset, I manually tagged about 20% of the comments (1,200) with labels as `positive`, `neutral`, `negative`. Although most comments were short (<2 sentences), this took about 4 hours. I noticed that most comments were complaints or queries, so I tried to ignore their content (mostly neutral or negative) and focused on their *tone* (which could still be positive - ie. an unhappy but still polite customer). 
+From the dataset, I manually tagged about ~30% of the comments (2,600) with labels as `positive`, `neutral`, `negative`. Although most comments were short (<2 sentences), this took about 4 hours. I noticed that most comments were complaints or queries, so I tried to ignore their content (mostly neutral or negative) and focused on their *tone* (which could still be positive - ie. an unhappy but still polite customer). 
 
-To get a baseline of how well the classifier would perform without support features, I ran the pure comments data straight through the `naive bayes` machine from the `e1071` package. I'm aware that training and testing on the same dataset tends to lead to overfitting, but in this situation I just wanted to get a baseline estimate of how well the classifier would perform. 
+To get a baseline of how well the classifier would perform without support features, I ran the pure comments data straight through the `naive bayes` machine from the `e1071` package.
 
-```
+```R
 library(e1071)
 data_lab <- data[!is.na(data$sentiment),] #n=2,636
 classifier_l <- naiveBayes(data_lab[,3], data_lab[,5])
@@ -215,41 +216,47 @@ predicted_l <- predict(classifier_l, data_lab)
 results_l <- table(predicted_l, data_lab[,5], dnn=list('predicted','actual'))
 binom.test(results_l[1,1] + results_l[2,2]+ results_l[3,3], nrow(data_lab), p=0.5)
 ```
-The classifier couldn't work (as expected).
-```
+The classifier couldn't work (as expected):
+```R
           actual
 predicted  negative neutral positive
   negative        0       0        0
   neutral       584    1516      536
   positive        0       0        0
 ```
-Including variables like `hour`, `day of week` and `wordcount` increased the accuracy by 5%:
-```
-          actual
+I ran it again with the predictors including variables like `hour`, `day of week` and `wordcount`. This increased the accuracy by 5%:
+```R
+classifier_l <- naiveBayes(data_lab[,c(3,7,8,10)], data_lab[,5])
+predicted_l <- predict(classifier_l, data_lab)
+results_l <- table(predicted_l, data_lab[,5], dnn=list('predicted','actual'))
+binom.test(results_l[1,1] + results_l[2,2]+ results_l[3,3], nrow(data_lab), p=0.5)
+
+            actual
 predicted  negative neutral positive
   negative      117      48       63
   neutral       451    1453      450
   positive       16      15       23
 probability of success: 0.6043247 
 ```
-I decided to make more features to improve the accuracy of the machine. I came across [this Tidytext post](https://rstudio-pubs-static.s3.amazonaws.com/236096_2ef4566f995e48c1964013310bf197f1.html) detailing three sentiment dictionaries commonly used in classification: The AFINN, NRC and BING. In summary:
+Going further, I decided to make more features to improve the accuracy of the machine. I came across [this Tidytext post](https://rstudio-pubs-static.s3.amazonaws.com/236096_2ef4566f995e48c1964013310bf197f1.html) detailing three sentiment dictionaries commonly used in classification: The AFINN, NRC and BING. In summary:
 
 > [FINN](https://github.com/fnielsen/afinn)
 is a list of words available in English, Swedish and Danish that are rated with integers corresponding to how `positive` TO `negative`-ly valenced they are. The AFINN-111.txt version contains 2477 common words and phrases, ranging from `Very Negative` (rated -5, -4), `Negative` (-3, -2, -1), `Positive` (rated 1, 2, 3) or `Very Positive` (4, 5). This list includes common swear words and internet lexicon like "lol". 
->
+
 > [BING](https://www.cs.uic.edu/~liub/FBS/sentiment-analysis.html#lexicon) is a dictionary by Prof Bing Liu where words are strictly sorted as either `positive` or `negative`. It has 4782 negative keywords and 2006 positive keywords. 
->
+
 > The [NRC](http://saifmohammad.com/WebPages/NRC-Emotion-Lexicon.htm) is a large list by Saif Mohammad with over 14,000 words corresponding to eight basic emotions (anger, fear, anticipation, trust, surprise, sadness, joy, and disgust) and two sentiments (negative and positive). 
 
 I chose to use the AFINN dictionary as it offers a greatest range of sensitivity to sentiment, which I felt was more important than detecting emotion (which would likely be only anger / joy). 
-```
+```R
 # Load word files 
 setwd("~/sentiment_analysis")
-afinn_list <- read.delim(file='AFINN-111.txt', header=FALSE, stringsAsFactors=FALSE); names(afinn_list) <- c('word', 'score')
+afinn_list <- read.delim(file='AFINN-111.txt', header=FALSE, stringsAsFactors=FALSE)
+names(afinn_list) <- c('word', 'score')
 afinn_list$word <- tolower(afinn_list$word)
 ```
 I then modified the dictionary to include some local flavour and shorthand. I also removed some words like `charged` and `pay` which were rated as negative, but likely meant as neutral in the context of discussing taxi payments. 
-```
+```R
 # Remove topic-specific words
 afinn_list$score[afinn_list$word %in% c("charges", "charged", "pay", "like", "joke", "improvement")] <- 0
 
@@ -263,8 +270,8 @@ afinn_list$score[afinn_list$word %in% c("cheat", "cheated", "frustrated", "scam"
                                         "useless", "dishonest", "tricked", "waste", "gimmick", "liar", "lied")] <- -4
                                         
 # Add scores (for words not in AFINN)
-pos4 <- data.frame(word = c("bagus", "yay", ":)", "kindly", "^^", "yay", "swee", "awesome", "polite", 
-                            "professional", "thnks", "thnk", "thx", "thankyou","tq", "ty", "pls"), score = 4)
+pos4 <- data.frame(word = c("bagus", "yay", ":)", "(:", "kindly", "^^", "yay", "swee", "awesome", "polite", 
+                            "professional", "thnks", "thnk", "thx", "thankyou","tq", "ty", "tyvm", "please", "pls"), score = 4)
 pos2 <- data.frame(word = c("jiayou", "assist", "amin", "amen", "arigato", "well", "bro"), score = 2)
 pos1 <- data.frame(word = c("hi", "dear", "hello"), score = 1)
 neg1 <- data.frame(word = c("silly", "dafaq", "dafuq", "cringe", "picky"), score = -1)
@@ -275,67 +282,93 @@ neg4 <- data.frame(word = c("freaking", "knn", "ccb", "fk", "fking", "moronic"),
 # Merge changes with main AFINN list
 afinn_list <- rbind(afinn_list, pos4, pos2, pos1, neg1, neg2, neg4)
 ```
-*Note: I don't relaly have an objective basis for why some swear words get a higher rating
+*Note: I don't really have an objective basis for why some swear words get a higher rating
 than others, but I classified them by how angry my mother would be when I say them.*
 
 With this dictionary, I could calculate the average sentiment for each comment *based on their net
 Count sentiment per comment based on net word score:
 
-```
-library(plyr)
-
-# Split comments to single words per cell
-grab_indv <- strsplit(grab$post_comment, split = " ") ; uber_indv <- strsplit(uber$post_comment, split = " ") 
-uber_words <- data.frame(message_ID = rep(uber_words$message_ID, sapply(uber_indv, length)), words = unlist(uber_indv)) 
-grab_words <- data.frame(message_ID = rep(grab_words$message_ID, sapply(grab_indv, length)), words = unlist(grab_indv)) 
-grab_words$words <- tolower(grab_words$words); uber_words$words <- tolower(uber_words$words)
+```R
+## Split comments to single words per cell
+data_indv <- strsplit(data$post_comment, split = " ")
+    
+# Relink single words to parent comment, "message_ID"
+data_words <- data.frame(message_ID = rep(data$message_ID, sapply(data_indv, length)), 
+                         words = unlist(data_indv)) # n=174,405
+# To lower
+data_words$words <- tolower(data_words$words)
 
 # Customise stopwords
 library(tm)
-stop_words <- as.data.frame(stopwords("en")); more_stopwords <- as.data.frame(c("uber", "grab")) 
+stop_words <- as.data.frame(stopwords("en"))
+more_stopwords <- as.data.frame(c("uber", "grab", "will", "can", "get", 'u')) # add more if you want
 names(stop_words)[1] <- "words"; names(more_stopwords)[1] <- "words"
 stop_words <- rbind(stop_words, more_stopwords)
 detach("package:tm", unload=TRUE)
 
-# Remove stopwords, punctuation, empty rows, NA, stopwords again
-uber_words <- uber_words[!(uber_words$words %in% stop_words$words),]
-uber_words <- transform(uber_words, words = (sub("^([[:alpha:]]*).*", "\\1", uber_words$words)))
-uber_words <- uber_words[(!uber_words$words==""),]; uber_words <- uber_words[!is.na(uber_words$words),]
-uber_words <- uber_words[!(uber_words$words %in% stop_words$words),] 
+# Remove stopwords
+data_words <- data_words[!(data_words$words %in% stop_words$words),]
 
-grab_words <- grab_words[!(grab_words$words %in% stop_words$words),]
-grab_words <- transform(grab_words, words = (sub("^([[:alpha:]]*).*", "\\1", grab_words$words)))
-grab_words <- grab_words[(!grab_words$words==""),]; grab_words <- grab_words[!is.na(grab_words$words),]
-grab_words <- grab_words[!(grab_words$words %in% stop_words$words),] 
+# Remove punctuation, empty rows
+data_words <- transform(data_words, words = (sub("^([[:alpha:]]*).*", "\\1", data_words$words)))
+data_words <- data_words[(!data_words$words==""),] # n= 39826
+data_words <- data_words[!(data_words$words %in% stop_words$words),]
+data_words <- data_words[!is.na(data_words$words),]
 detach("package:plyr", unload=TRUE)
 
-# Match words with AFINN score to calc sentiment by words score
-grab_words <- left_join(grab_words, afinn_list, by= c("words" = "word"))
-uber_words <- left_join(uber_words, afinn_list, by= c("words" = "word")) 
-
-# Calculate mean of each comments' scores
-uber_afinn <- uber_words %>%
+# Calculate mean of each comments' word scores via the AFINN list
+data_afinn <- data_words %>%
     dplyr::group_by(message_ID) %>%
-    dplyr::summarise(mean = mean(score, na.rm=TRUE))
-grab_afinn <- grab_words %>%
-    dplyr::group_by(message_ID) %>%
-    dplyr::summarise(mean = mean(score, na.rm=TRUE))
+    dplyr::summarise(mean = mean(score, na.rm=TRUE)) # 2899
 
 # Convert NAN to 0
-is.nan.data.frame <- function(x) do.call(cbind, lapply(x, is.nan))
-uber_afinn[is.nan(uber_afinn)] <- 0; grab_afinn[is.nan(grab_afinn)] <- 0
+is.nan.data.frame <- function(x) do.call(cbind, lapply(x, is.nan)); data_afinn[is.nan(data_afinn)] <- 0
 ```
 From here, I tested to see if there's any significance in scores:
-```
-# Independent samples two-tailed t-test
-t.test(uber_afinn$mean, grab_afinn$mean)
+```R
+# Independent samples two-tailed t-test (lol freshman year stats making a comeback)
+uber <- data[data$Company=="uber",]
+grab <- data[data$Company=="grab",]
+t.test(uber$AFINN, grab$AFINN)
 
-# RESULTS
+### Results
+95 percent confidence interval: -0.2786706 -0.1390095
+mean of x   mean of y 
+0.4417077   0.6505478 
+
+t = -5.8628, df = 5836.9, p-value = 4.8e-09
 ```
 Turns out there's a significant difference in tone of comments towards both companies, with 
-Grab's customers being a fraction friendlier. 
+Grab's customers being a fraction more positive. I'll visualise this:
 
-However, it may be that this dictionary merely picks up valenced lexicon without care for negators or amplifiers within a sentence. This means it wouldn't detect sarcasm or awkward double negatives very well. 
+```R
+grab_boxplot <- grab %>%
+    mutate(Month_num = month(DatetimeSG)) %>%
+    subset(select=c(Month_num, AFINN, Company))
+uber_boxplot <- uber %>%
+    mutate(Month_num = month(DatetimeSG)) %>%
+    subset(select=c(Month_num, AFINN, Company)) 
+
+# Format decimal places, remove NAs, add labels for month names
+boxplots <- rbind(grab_boxplot, uber_boxplot)
+boxplots$AFINN <- round(boxplots$AFINN, digits=2) # hate trailing zeros
+boxplots[is.na(boxplots)] <- 0
+boxplots <- left_join(boxplots, Labels, by=c("Month_num" = "num"))
+
+# Create boxplot per month by AFINN score to visualise difference in t-test means
+ggplot(data = boxplots, aes(x=reorder(factor(Date), Month_num), y=AFINN)) + geom_boxplot(aes(fill=Company)) + 
+    scale_y_continuous(name = "AFINN score (neg=rude, pos=polite)", breaks = seq(-5, 5, 1.0), limits=c(-5, 5)) + 
+    scale_fill_brewer(palette = "Accent") + ggtitle("Distribution of Sentiment by Word", 
+    subtitle = "(Sentiment analysis through AFINN dictionary, based on public data from Facebook)") + xlab(NULL) +
+    theme(plot.title = element_text(family="Tahoma", face="bold", size=15),
+          plot.subtitle = element_text(face="italic",size=6), legend.title = element_text(face="italic",size=6),
+          legend.position = "bottom", legend.box = "horizontal", legend.box.just="left",
+          legend.key.size = unit(0.5, "cm"), legend.text = element_text(face="bold",size = 6),
+          axis.title = element_text(size=9)) 
+```
+![Imgur](https://i.imgur.com/Wlqgqvd.jpg)
+
+However, I want to push the theory even further. This method of calculation assigns scores to individual words without regard for features of natural language, like negators or amplifiers, that change the meaning of a sentence. This method also fails to accurately detect intent in cases of double negatives or sarcasm.  
 
 To check, I'll run another package on it - the `sentimentR` package, that ... (explanation). 
 
