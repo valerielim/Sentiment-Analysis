@@ -12,15 +12,15 @@ I'm looking to see if there is a difference in the way people talk and feel towa
 
 **Quick outline of workflow:**
 
-* Collect data from Facebook API 
-* Clean data
+*  Mining Data from Facebook API with R
+* Cleaning the data
 * Build features for machine learning
 * Label some data for training & testing
 * Evaluate & modify features if necessary
 * Deploy(?) final model on unlabelled data
 * Visualise results
 
-### Mining Data from Facebook API with R 
+# Mining Data from Facebook API with R 
 
 I chose to mine data from Facebook as it is the platform with the highest social activity for both brands, compared to Twitter or Instagram.
 
@@ -72,7 +72,7 @@ data <- transform(data, DatetimeGMT = as.character(DatetimeGMT),
 
 This returns just under `6500` comments for both Grab and Uber.
 
-### Cleaning the data
+# Cleaning the data
 
 First off, I cleaned up the date column. Data was stored in GMT time (UTC -8:00) so I converted it to Singapore Time (SGT +8:00). I wrote a function `format_FBtime` to do this so I could reuse it on subsequent analyses. This simple function requires the date column to be in string format. It returns the converted `DatetimeSG` in Date format.
 
@@ -202,7 +202,7 @@ data$wordcount <- str_count(data$post_comment, '\\s+')+1
 ```
 I can't access data on users' age, country or even gender, so there isn't much else to form. I couldn't think of any (publicly available) features that might be correlated to the sentiment of comments for now, so I'll move on to sentiment analysis. 
 
-### Sentiment Analysis
+# Sentiment Analysis
 
 From the dataset, I manually tagged about ~30% of the comments (2,600) with labels as `positive`, `neutral`, `negative`. Although most comments were short (<2 sentences), this took about 4 hours. I noticed that most comments were complaints or queries, so I tried to ignore their content (mostly neutral or negative) and focused on their *tone* (which could still be positive - ie. an unhappy but still polite customer). 
 
@@ -245,9 +245,9 @@ is a list of words available in English, Swedish and Danish that are rated with 
 
 > [BING](https://www.cs.uic.edu/~liub/FBS/sentiment-analysis.html#lexicon) is a dictionary by Prof Bing Liu where words are strictly sorted as either `positive` or `negative`. It has 4782 negative keywords and 2006 positive keywords. 
 
-> The [NRC](http://saifmohammad.com/WebPages/NRC-Emotion-Lexicon.htm) is a large list by Saif Mohammad with over 14,000 words corresponding to eight basic emotions (anger, fear, anticipation, trust, surprise, sadness, joy, and disgust) and two sentiments (negative and positive). 
+> The [NRC](http://saifmohammad.com/WebPages/NRC-Emotion-Lexicon.htm) is a large list by Saif Mohammad with over 14,000 words corresponding to eight basic emotions (`anger`, `fear`, `anticipation`, `trust`, `surprise`, `sadness`, `joy`, and `disgust`) and two sentiments (`negative` and `positive`). 
 
-I chose to use the AFINN dictionary as it offers a greatest range of sensitivity to sentiment, which I felt was more important than detecting emotion (which would likely be only anger / joy). 
+I chose to use the AFINN dictionary as it offers a greatest range of sensitivity to sentiment, which I felt was more important than detecting emotion (which would likely be only anger / joy due to complaints). 
 ```R
 # Load word files 
 setwd("~/sentiment_analysis")
@@ -266,17 +266,14 @@ afinn_list$score[afinn_list$word=="YOURWORDHERE"]
 # Modify scores for words in AFINN
 afinn_list$score[afinn_list$word %in% c("best", "nice", "appreciation")] <- 4
 afinn_list$score[afinn_list$word %in% c("irresponsible", "whatever")] <- -1
-afinn_list$score[afinn_list$word %in% c("cheat", "cheated", "frustrated", "scam", "pathetic", "hopeless", "lousy"
-                                        "useless", "dishonest", "tricked", "waste", "gimmick", "liar", "lied")] <- -4
+afinn_list$score[afinn_list$word %in% c("cheat", "cheated", "frustrated", "scam", "pathetic", "hopeless", "lousy", "useless", "dishonest", "tricked", "waste", "gimmick", "liar", "lied")] <- -4
                                         
 # Add scores (for words not in AFINN)
-pos4 <- data.frame(word = c("bagus", "yay", ":)", "(:", "kindly", "^^", "yay", "swee", "awesome", "polite", 
-                            "professional", "thnks", "thnk", "thx", "thankyou","tq", "ty", "tyvm", "please", "pls"), score = 4)
+pos4 <- data.frame(word = c("bagus", "yay", ":)", "(:", "kindly", "^^", "yay", "swee", "awesome", "polite", "professional", "thnks", "thnk", "thx", "thankyou","tq", "ty", "tyvm", "please", "pls"), score = 4)
 pos2 <- data.frame(word = c("jiayou", "assist", "amin", "amen", "arigato", "well", "bro"), score = 2)
 pos1 <- data.frame(word = c("hi", "dear", "hello"), score = 1)
 neg1 <- data.frame(word = c("silly", "dafaq", "dafuq", "cringe", "picky"), score = -1)
-neg2 <- data.frame(word = c("jialat", "waited", "waiting", "rubbish", "lousy", "siao", "??", "-_-", "-.-", 
-                            "lying", "lies", "wtf", "wts", "sicko", "slap", "slapped"), score = -2)
+neg2 <- data.frame(word = c("jialat", "waited", "waiting", "rubbish", "lousy", "siao", "??", "-_-", "-.-", "lying", "lies", "wtf", "wts", "sicko", "slap", "slapped"), score = -2)
 neg4 <- data.frame(word = c("freaking", "knn", "ccb", "fk", "fking", "moronic"), score = -4)
 
 # Merge changes with main AFINN list
@@ -285,17 +282,14 @@ afinn_list <- rbind(afinn_list, pos4, pos2, pos1, neg1, neg2, neg4)
 *Note: I don't really have an objective basis for why some swear words get a higher rating
 than others, but I classified them by how angry my mother would be when I say them.*
 
-With this dictionary, I could calculate the average sentiment for each comment *based on their net
-Count sentiment per comment based on net word score:
+With this dictionary, I calculated the net sentiment for each comment, based on the averages of their AFINN word scores.
 
 ```R
 ## Split comments to single words per cell
 data_indv <- strsplit(data$post_comment, split = " ")
     
 # Relink single words to parent comment, "message_ID"
-data_words <- data.frame(message_ID = rep(data$message_ID, sapply(data_indv, length)), 
-                         words = unlist(data_indv)) # n=174,405
-# To lower
+data_words <- data.frame(message_ID = rep(data$message_ID, sapply(data_indv, length)), words = unlist(data_indv)) # n=174,405
 data_words$words <- tolower(data_words$words)
 
 # Customise stopwords
@@ -309,7 +303,7 @@ detach("package:tm", unload=TRUE)
 # Remove stopwords
 data_words <- data_words[!(data_words$words %in% stop_words$words),]
 
-# Remove punctuation, empty rows
+# Remove punctuation, empty rows, NA
 data_words <- transform(data_words, words = (sub("^([[:alpha:]]*).*", "\\1", data_words$words)))
 data_words <- data_words[(!data_words$words==""),] # n= 39826
 data_words <- data_words[!(data_words$words %in% stop_words$words),]
@@ -338,7 +332,7 @@ mean of x   mean of y
 
 t = -5.8628, df = 5836.9, p-value = 4.8e-09
 ```
-Turns out there's a significant difference in tone of comments towards both companies, with 
+Turns out there's a significant difference `p<0.05` in tone of comments towards both companies, with 
 Grab's customers being a fraction more positive. I'll visualise this:
 
 ```R
