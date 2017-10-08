@@ -4,25 +4,25 @@
 
 Grab and Uber are competing pretty hard for the local market right now. After 
 Travis' controversies started in Feb 2017, I noticed some friends grew polarised towards one company or the other. 
-I wondered if the company's negative press image would affect the way other customers felt towards the brand as well. 
+I wondered if the company's press image would affect the way other customers felt towards the brand as well. 
 
-This post outlines the process I used to mine public data using R and the Facebook Graph API for Uber and Grab. 
+This post outlines the process I used to mine public Facebook data using Graph API and `R `for Uber and Grab. 
 I then built a `naive bayes` sentiment classifier to label the data and visualised the results below. All in all,
-I'm looking to see if there is a difference in the way people talk and feel toward Grab and Uber. 
+I'm looking to see if there is a difference in the way people feel toward Grab and Uber.
 
 **Quick outline of workflow:**
 
-* Mining Data from Facebook API with R
+* Mining Data from Facebook
 * Cleaning the data
 * Building features for machine learning
 * Machine learning for sentiment classification
 * Visualise results
 
-# Mining Data from Facebook API with R 
+# Mining Data from Facebook
 
-I chose to mine data from Facebook as it is the platform with the highest social activity for both brands, compared to Twitter or Instagram.
+I chose to mine data from Facebook as it is the social media platform with the highest activity for both brands, compared to Twitter or Instagram.
 
-Setting up the API authentication took less than 5 minutes. From my Facebook account, I made a simple developer's app, and copied my authentication key from the app's [settings](https://developers.facebook.com/tools/accesstoken/). I then set up the API authentication in R below. Detailed Facebook API set-up instructions can be found [in this tutorial](http://thinktostart.com/analyzing-facebook-with-r/) or on the [Rfacebook documentation](https://cran.r-project.org/web/packages/Rfacebook/Rfacebook.pdf).
+Setting up the Graph API authentication for Facebook is relatively fast. From my account, I set up an empty app and thus received an authentication key [here](https://developers.facebook.com/tools/accesstoken/) to call the API. Locally, I set up the rest of the process to receive the data using R (below) following the [Rfacebook documentation](https://cran.r-project.org/web/packages/Rfacebook/Rfacebook.pdf).
 
 ```R 
 library(RFacebook)
@@ -36,47 +36,92 @@ fb_oauth <- fbOAuth(app_id, app_secret, extended_permissions = FALSE,
 legacy_permissions = FALSE, scope = NULL)
 save(fb_oauth, file="fb_oauth"); load("fb_oauth")
 ```
-`RFacebook` allows mining of post data from singular pages using `getPage`, or through a custom URL using `callAPI`. Facebook also has a [neat interface](https://developers.facebook.com/tools/explorer/145634995501895/) to pull more specific data like comments, likes, (public) users info into a JSON file. I tried both and find the interface smoother, but it's up to personal preference. 
-
-I decided to mine all public comments for the last 6 months, from 01 March 2017 to 31 August 2017. I only kept the *parent* comment in each thread as child comments tend to be the respective customer support staff replying to users' questions, which isn't what I'm looking for. 
+The `RFacebook` package allows mining of singular page data using `getPage`, or more specific data through a custom URL using `callAPI`. Facebook also has a [neat interface](https://developers.facebook.com/tools/explorer/145634995501895/) to pull data like comments, likes, and (public) users info into a JSON file. Using R: 
 
 ```R
-# Pull official posts through API
-fb_grab_posts <- getPage(page="grab", token = fb_oauth, n = 3100, feed = TRUE,
+# Pull metrics info on all posts through API
+fb_grab_posts <- getPage(page = "Grab", token = fb_oauth, n = 5000, feed = TRUE,
                          since='2017/03/01', until='2017/08/31',
                          reactions = FALSE, verbose = TRUE, api = "v2.10")
-fb_uber_posts <- getPage(page="UberSingapore", token = fb_oauth, n = 3100, feed = TRUE,
+fb_uber_posts <- getPage(page = "UberSingapore", token = fb_oauth, n = 5000, feed = TRUE,
                          since='2017/03/01', until='2017/08/31',
                          reactions = FALSE, verbose = TRUE, api = "v2.10")
+```
+That gave me a list of all posts created on the main page, and information on each post. 
 
-# Call Graph API for posts' comments. Note: Max limit n = 100 comments at a time. 
+Going further, I also decided to extract specific comments made on each post during that same period from `01 March 2017` to `30 August 2017`. As many comments were made between customer service staff and various users (with questions or complaints), I decided to keep only the *parent comment* of each thread. 
+
+For this task, I found the **Graph interface** itself smoother to use instead of R. Under `API v2.10`, there is a maximum limit of `n=100` comments you can call at any one time. If you're using R, this means that you will need to keep changing your `callAPI` command using a unique key provided in the tail end of the previous call, which are all linked consecutively. However, with the interface, you just need to keep pressing the "next" button, which returns a JSON file. It's not the most elegant solution but it works fine for a small dataset like this. 
+```R
+# Not run: For those who want to call Graph API through R for comments: 
 fb_grab_all_comments <- callAPI("https://graph.facebook.com/v2.10/grab?fields=posts.limit(100){comments}", 
         token = fb_oauth, api = "v2.10")
 fb_uber_all_comments <- callAPI("https://graph.facebook.com/v2.10/grab?fields=posts.limit(100){comments}", 
         token = fb_oauth, api = "v2.10")
-options(stringsAsFactors = FALSE)
+```
+This returns just under `6500` comments for both Grab and Uber.
 
-# Combine dataframes
-names(fb_grab_all_comments) <- c("DatetimeGMT", "post_username", "post_ID", "post_comment", "message_ID")
-names(fb_uber_all_comments) <- c("DatetimeGMT", "post_username", "post_ID", "post_comment", "message_ID")
-uber <- mutate(fb_uber_all_comments, Company="uber"); 
-grab <- mutate(fb_grab_all_comments, Company="grab")
+# Cleaning the data
+```R
+# Load libraries
+library(dplyr)
+library(stringr) 
+library(lubridate) 
+library(e1071)
+```
+I can't print a tibble as the data is too wide, but the raw *comments* data from facebook should looks something like this.
+
+![Imgur](https://i.imgur.com/L2aZhBa.png)
+
+### Data Types
+
+I'll start by merging comments data from both companies into a single data set. This makes analysis faster as I don't have to run it twice. I'll keep only the first 5 columns which has what I need - Date, Username, Post ID, Comment, Message ID. 
+
+*Note: Comment IDs are all unique. Post ID may repeat, as it refers to the ID for the post a comment belonged to.*
+
+```R
+# Merge data
+options(stringsAsFactors = FALSE)
+uber <- subset(fb_uber_all_comments, select=c(1:5)); grab <- subset(fb_grab_all_comments, select=c(1:6)) 
+names(grab) <- c("DatetimeGMT", "post_username", "post_ID", "post_comment", "message_ID")
+names(uber) <- c("DatetimeGMT", "post_username", "post_ID", "post_comment", "message_ID")
+uber <- mutate(uber, Company="uber"); grab <- mutate(grab, Company="grab")
 data <- rbind(uber, grab)
 
-# Format for consistency
-data <- transform(data, DatetimeGMT = as.character(DatetimeGMT), 
-                  post_username = as.character(post_username),
-                  post_ID = as.character(post_ID), 
-                  post_comment = as.character(post_comment),
+# Re-format for consistency
+data <- transform(data, DatetimeGMT = as.character(DatetimeGMT), post_username = as.character(post_username), 
+                  post_ID = as.character(post_ID), post_comment = as.character(post_comment), 
                   message_ID = as.character(message_ID)); str(data)
 ```
 
-This returns just under `6500` comments for both Grab and Uber.
+### Date Time Formats
 
-A quick plot of the number of likes, comments and shares each company has earned: 
+According to [documentation](https://www.facebook.com/help/audiencenetwork/217776295242609), dates were stored in Pacific Standard Time `UTC -8:00`. I converted them back to Singapore Time `UTC +8:00`, and wrote a short function `format_FBtime` for this so that I could reuse it on subsequent analyses. 
+```R
+format_FBtime <- function(df) {
+    df$DatetimeGMT <- as.POSIXct(df$DatetimeGMT, format = "%Y-%m-%dT%H:%M:%S+0000", tz = "GMT")
+    df$DatetimeSG <- with_tz(df$DatetimeGMT, "Singapore")
+    df <- subset(df, select= -c(DatetimeGMT))
+    return(df)
+}
+
+# Apply
+data <- format_FBtime(data); str(data)
+
+# Select only data from March to Aug 2017 after updating timezones
+data <- data[data$DatetimeSG >= as.Date("010317", "%d%m%y") &
+                 data$DatetimeSG < as.Date("010917", "%d%m%y"), ] 
+```
+# Exploratory Analysis
+
+### Likes and Comments
+
+I'll first use the `format_FBtime` function on the page data set to clean up the information on each post. 
+
+Here's a quick plot of the number of likes, comments and shares each company has earned in 6 months: 
 
 ```R
-# Melt variables, group by month
+# Merge and clean
 fb_posts <- rbind(fb_grab_posts, fb_uber_posts)
 colnames(fb_posts)[4] <- "DatetimeGMT"; fb_posts <- format_FBtime(fb_posts)
 fb_plot_type <- fb_posts[fb_posts$from_name=="Uber"|fb_posts$from_name=="Grab",c(2:4,8:11)]
@@ -91,48 +136,60 @@ fb_plot_type1 <- fb_plot_type %>%
 
 ggplot(data = fb_plot_type1) + 
     geom_point(aes(x = reorder(Date, month_num), y = total, colour=variable)) + 
-    geom_line(aes(x = reorder(Date, month_num), y = total, colour = variable, group = variable), size=1, stat="identity") +
-    scale_x_discrete(name = NULL, labels=abbreviate) + scale_y_continuous(name = "Number of likes/comments") +
-    ggtitle("Distribution of Facebook Engagement by Likes, Shares, Comments", subtitle = "(based on public data from Facebook)") +
-    theme(plot.title = element_text(face="bold", size=15), plot.subtitle = element_text(face="italic",size=6), 
-          legend.title = element_text(face="italic",size=6), legend.position = "right", legend.box = "vertical",
-          legend.key.size = unit(0.5, "cm"), legend.text = element_text(face="bold",size = 6), legend.box.just="left", 
-          strip.text=element_text(face="bold", size=9), axis.title = element_text(size=9)) + 
-     facet_grid(. ~ from_name, scales="free")
+    geom_line(aes(x = reorder(Date, month_num), y = total, colour = variable, group = variable), 
+    size = 1, stat = "identity") + scale_x_discrete(name = NULL, labels = abbreviate) + 
+    scale_y_continuous(name = "Number of likes/comments") + 
+    ggtitle("Distribution of Facebook Engagement by Likes, Shares, Comments", 
+    subtitle = "(based on public data from Facebook)") + facet_grid(. ~ from_name, scales = "free") +
+    theme(plot.title = element_text(face="bold", size = 15), 
+          plot.subtitle = element_text(face = "italic", size = 6), legend.box.just = "left", 
+          legend.title = element_text(face="italic", size=6), legend.position = "right", 
+          legend.box = "vertical", legend.text = element_text(face="bold",size = 6), 
+          legend.key.size = unit(0.5, "cm"), axis.title = element_text(size = 9)
+          strip.text = element_text(face = "bold", size = 9)) 
+    
 ```
 ![Imgur](https://i.imgur.com/hz0XVCA.jpg)
 
-# Cleaning the data
+Grab has higher likes and shares, while Uber has more comments on its posts. Still, it's hard to tell which company is more popular just by looking at metrics, especially without considering that some of the comments activity were from competitions and giveaways. 
 
-First off, I cleaned up the date column. Data was stored in GMT time (UTC -8:00) so I converted it to Singapore Time (SGT +8:00). I wrote a function `format_FBtime` to do this so I could reuse it on subsequent analyses. This simple function requires the date column to be in string format. It returns the converted `DatetimeSG` in Date format.
+### Effects of Giveaways on Comments
 
-```R
-library(lubridate)
-library(dplyr)
+Putting aside *likes* for now, let's take a closer look at comments and giveaways. From personal observation, those usually include a call to action like: *"... to win, tell us why in the comments below!"*. To count how many of such competitions there were:
 
-format_FBtime <- function(df) {
-    df$DatetimeGMT <- as.POSIXct(df$DatetimeGMT, format = "%Y-%m-%dT%H:%M:%S+0000", tz = "GMT")
-    df$DatetimeSG <- with_tz(df$DatetimeGMT, "Singapore")
-    df <- subset(df, select= -c(DatetimeGMT))
-    return(df)
-}
-
-# Apply
-data <- format_FBtime(data); str(data)
-
-# Select only data from March to Aug 2017 after changing timezones
-data <- data[data$DatetimeSG >= as.Date("010317", "%d%m%y") &
-                 data$DatetimeSG < as.Date("010917", "%d%m%y"), ] 
-
+```R 
+grab_competitions <- filter(fb_grab_posts, grepl("comment", fb_grab_posts$message) %>% filter(grepl("Grab", from_name) 
+uber_competitions <- filter(fb_uber_posts, grepl("comment", fb_uber_posts$message) %>% filter(grepl("Uber", from_name) 
 ```
-Next, I'll do a visualisation of the data to see if the number of posts per day for both companies, and see if there are any trends in comments by `month`, `week`, `day of week` or `hour` the comment was posted. 
-```R
-# Comments by Week
-data1 <- data %>% 
-    dplyr::group_by(week = week(DatetimeSG), Company) %>% 
-    dplyr::summarise(num_comments = n()) 
 
-# Comments by DAY
+In total, Grab has held 10 competitions, while Uber has held 14 competitions. They were held on:
+
+```R
+> grab_competitions$DatetimeSG
+
+[1] "2017-08-16 13:58:37 +08" "2017-08-15 12:02:12 +08" "2017-08-12 11:00:00 +08"
+[4] "2017-07-30 10:00:00 +08" "2017-07-20 10:00:00 +08" "2017-07-07 10:00:00 +08"
+[7] "2017-06-18 14:00:00 +08" "2017-06-16 18:00:00 +08" "2017-06-13 14:49:38 +08"
+[10] "2017-06-08 18:42:37 +08"
+
+> uber_competitions$DatetimeSG
+
+[1] "2017-06-16 09:53:18 +08" "2017-06-14 12:15:28 +08" "2017-06-01 16:33:26 +08"
+[4] "2017-05-20 13:03:28 +08" "2017-05-14 11:31:01 +08" "2017-05-06 13:38:25 +08"
+[7] "2017-04-29 11:57:28 +08" "2017-04-22 12:01:27 +08" "2017-04-15 11:50:56 +08"
+[10] "2017-04-08 12:15:28 +08" "2017-04-01 18:19:30 +08" "2017-03-26 16:27:51 +08"
+[13] "2017-03-25 11:56:01 +08" "2017-03-18 09:17:02 +08"
+```
+As expected, these competition periods (Grab: June to August; Uber: March to June) do visibly correlate with heightened comment activity on their respective accounts page.
+
+> It's also interesting to note that it looks like Grab and Uber have been avoiding holding competitions at the same time. 
+
+### General User Habits
+
+To take a look at overall trends, I visualised the data to see if there are any patterns in the `month`, `week`, `day of week` or `hour` that comments were posted as these might be useful for feature engineering later. 
+
+```R
+# Comments by WEEK
 data1 <- data %>% 
     dplyr::group_by(week = week(DatetimeSG), Company) %>% 
     dplyr::summarise(num_comments = n()) 
@@ -151,7 +208,7 @@ data2 <- data %>%
     dplyr::group_by(Month = month(DatetimeSG), Company) %>% 
     dplyr::summarise(num_comments = n()) 
 
-Labels <- data.frame(num = c(3:9), Date = c("Mar", "Apr", "May", "Jun","Jul", "Aug", "Sep"))
+Labels <- data.frame(num = c(3:9), Date = c("Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"))
 data2 <- left_join(data2, Labels, by=c("Month" = "num"))    
 
 plot2 <- ggplot(data2, aes(x=reorder(Date, Month), y=num_comments)) +
@@ -163,7 +220,7 @@ plot2 <- ggplot(data2, aes(x=reorder(Date, Month), y=num_comments)) +
           legend.text = element_text(face="bold",size = 6), legend.position = "none",
           strip.text=element_text(face="bold", size=9), axis.title = element_text(size=9))
 
-# Comments by weekday
+# Comments by WEEKDAY
 data3 <- data %>% 
     dplyr::group_by(Dayofweek, Company) %>% 
     dplyr::summarise(num_comments = n()) 
@@ -178,7 +235,7 @@ plot3 <- ggplot(data3, aes(x=reorder(Date, Dayofweek), y=num_comments)) +
           legend.text = element_text(face="bold",size = 6), legend.position = "none",
           strip.text=element_text(face="bold", size=9), axis.title = element_text(size=9))
 
-# Comments by hour of day
+# Comments by HOUR
 data4 <- data %>% 
     dplyr::group_by(Hour, Company) %>% 
     dplyr::summarise(num_comments = n()) 
@@ -215,15 +272,34 @@ multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
     }
 }
 
-multiplot(plot1, plot2, plot3, plot4, cols=2)
+output <- multiplot(plot1, plot2, plot3, plot4, cols=2)
 ```
 ![Imgur](https://i.imgur.com/ckykcVm.png)
 
-Grab appears to have wildly engaging giveaways with high user participation (top left, total comments per *week* shows Grab has 4 bright spikes in activity), while Uber maintains a more consistent performance week to week. This trend reverses itself when data is aggregated by *month* (bottom left) -- suggesting that Uber had overall strong Facebook engagement performance in May while Grab's engagement has spaced itself out more consistently over the 6 months.
+As these calculations were made using only the parent comment of each thread, I infer these things:
 
-On micro-trends, Uber users' commenting habits fit expectations in that they were most active on Saturday and Sunday, but Grab's users post comments the most on Tuesday and Wednesday. (I have no explanation why this is so.) Uber's users make the most comments around 6pm while Grab's users make them at both 11am and 6pm. Again. I have no idea what people would complain about at 11am in the morning when there's no peak hour but OK. 
+1. Grab's competitions don't affect their overall engagement much. I assume that in giveaways, people tend to start a new parent thread, rather than comment as a reply to someone else's competition entry. Thus, while Grab has held its giveaways from June to August, their average number of comments have remained consistent with the months that they did not have giveaways, suggesting that the giveways did not really impact engagement. 
 
-Back to the data, I'll added a simple line to count the number of words per comment to finish prepping for sentiment analysis. 
+2. Conversely, Uber's competitions raised their overall engagement during the months of March - June, during the same period they held giveaways. However, it also appears that their engagement rates dependent on it. When the giveaways stopped in June, the number of comments plummeted in August.
+
+Three questions remain:
+
+* Why does Uber have such a high number of comments in May 2017? What happened?
+* Why does Grab have such a high number of comments in `insert weeks`? These weeks did NOT have any giveaways.
+* Why do Uber's users comment more on weekends? (Could they be having more weekend-related promos?)
+
+These questions would be fun to explore, but as they are not the focus of this project, I'll leave them for another time. 
+
+### Other Features
+
+I'll add features to build the week number, day, and hour into the dataset. 
+
+```R
+CODE HERE
+```
+
+Also, I'll added a simple line to count the number of words per comment to finish prepping for sentiment analysis. 
+
 ```R
 # Remove non-ASCII characters in comments, usernames
 data$post_comment <- gsub("[^0-9A-Za-z\\\',!?:;.-_@#$%^&*()\" ]", "", data$post_comment)
@@ -232,55 +308,22 @@ data$post_username <- gsub("[^0-9A-Za-z\\\',!?:;.-_@#$%^&*()\" ]", "", data$post
 # Count words per comment
 data$wordcount <- str_count(data$post_comment, '\\s+')+1
 ```
-I couldn't think of any (publicly available) features that might be correlated to the sentiment of comments for now, so I'll move on. Unfortunately, I can't access personal data on users' age, country or even gender, so we're quite limited on what we can do with regards to demographics. 
+Unfortunately, I can't access personal data on users' age, country or even gender, so we're quite limited on what we can do with regards to exploring relationships between demographics and sentiment. I'll move on for now.
 
-# Building features for machine learning
+### Language features
 
-From the dataset, I manually tagged about ~30% of the comments (2,600) with labels as `positive`, `neutral`, `negative`. Although most comments were short (<2 sentences), this took about 6 hours. I noticed that most comments were complaints or queries, so I tried to ignore their content (mostly neutral or negative) and focused on their *tone* (which could still be positive - ie. an unhappy but still polite customer). 
-
-To get a baseline of how well the classifier would perform without support features, I ran the pure comments data straight through the `naive bayes` machine from the `e1071` package.
-
-```R
-library(e1071)
-data_lab <- data[!is.na(data$sentiment),] #n=2,636
-classifier_l <- naiveBayes(data_lab[,3], data_lab[,5])
-predicted_l <- predict(classifier_l, data_lab)
-results_l <- table(predicted_l, data_lab[,5], dnn=list('predicted','actual'))
-binom.test(results_l[1,1] + results_l[2,2]+ results_l[3,3], nrow(data_lab), p=0.5)
-```
-The classifier couldn't work (as expected):
-```R
-          actual
-predicted  negative neutral positive
-  negative        0       0        0
-  neutral       584    1516      536
-  positive        0       0        0
-```
-I ran it again with the predictors including variables like `hour`, `day of week` and `wordcount`. This increased the accuracy by `3%`:
-```R
-classifier_l <- naiveBayes(data_lab[,c(3,7,8,10)], data_lab[,5])
-predicted_l <- predict(classifier_l, data_lab)
-results_l <- table(predicted_l, data_lab[,5], dnn=list('predicted','actual'))
-binom.test(results_l[1,1] + results_l[2,2]+ results_l[3,3], nrow(data_lab), p=0.5)
-
-            actual
-predicted  negative neutral positive
-  negative      117      48       63
-  neutral       451    1453      450
-  positive       16      15       23
-```
-That wasn't very helpful, so I decided to make more features to improve the accuracy of the machine. 
-
-I came across [this Tidytext post](https://rstudio-pubs-static.s3.amazonaws.com/236096_2ef4566f995e48c1964013310bf197f1.html) detailing three commonly used dictionaries in sentiment classification: The AFINN, NRC and BING. In summary:
+I came across [this Tidytext post](https://rstudio-pubs-static.s3.amazonaws.com/236096_2ef4566f995e48c1964013310bf197f1.html) detailing three commonly used dictionaries in sentiment classification: The AFINN, NRC and BING. A quick preview:
 
 > [FINN](https://github.com/fnielsen/afinn)
 is a list of words available in English, Swedish and Danish that are rated with integers corresponding to how `positive` or `negative`  they are. The AFINN-111 version contains 2477 common words and phrases, ranging from `Very Negative` (rated -5, -4), `Negative` (-3, -2, -1), `Positive` (rated 1, 2, 3) or `Very Positive` (4, 5). I appreciate that this list also includes common swear words and internet lexicon like "lol". 
 
-> [BING](https://www.cs.uic.edu/~liub/FBS/sentiment-analysis.html#lexicon) is a dictionary by Prof Bing Liu where words are strictly sorted as either `positive` or `negative`. It has 4782 negative keywords and 2006 positive keywords. 
+> [BING](https://www.cs.uic.edu/~liub/FBS/sentiment-analysis.html#lexicon) 
+is a dictionary by Prof Bing Liu where words are strictly sorted as either `positive` or `negative`. It has 4782 negative keywords and 2006 positive keywords that relate to common sentiment. 
 
-> The [NRC](http://saifmohammad.com/WebPages/NRC-Emotion-Lexicon.htm) is a large list by Saif Mohammad with over 14,000 words corresponding to eight basic emotions (`anger`, `fear`, `anticipation`, `trust`, `surprise`, `sadness`, `joy`, and `disgust`) and two sentiments (`negative` and `positive`). 
+> The [NRC](http://saifmohammad.com/WebPages/NRC-Emotion-Lexicon.htm) is the largest of the three dictionaries, by Saif Mohammad. It has over 14,000 words corresponding to eight basic emotions (`anger`, `fear`, `anticipation`, `trust`, `surprise`, `sadness`, `joy`, and `disgust`) and two sentiments (`negative` and `positive`). 
 
-I chose to use the AFINN dictionary as it offers a greatest range of sensitivity to sentiment, which I felt was more important than detecting emotion (which would be predominantly anger due to it being complaints). 
+I chose to use the AFINN dictionary as it offers a greatest range of sensitivity to sentiment, which I felt was more important than detecting emotion, which was not likely to range by much.
+
 ```R
 # Load word files 
 setwd("~/sentiment_analysis")
@@ -288,7 +331,9 @@ afinn_list <- read.delim(file='AFINN-111.txt', header=FALSE, stringsAsFactors=FA
 names(afinn_list) <- c('word', 'score')
 afinn_list$word <- tolower(afinn_list$word)
 ```
-I then modified the dictionary to include some local flavour and shorthand. I also removed scores for words like `charged` and `pay` which were rated as negative, but likely meant as neutral in the context of discussing taxi payments. 
+
+I then modified the dictionary to include some local flavour and shorthand. I also removed scores for words like `charged` and `pay` which were rated by AFINN as negative, but likely meant as neutral in the context of discussing taxi payments. 
+
 ```R
 # Remove topic-specific words
 afinn_list$score[afinn_list$word %in% c("charges", "charged", "pay", "like", "joke", "improvement")] <- 0
@@ -309,13 +354,12 @@ neg1 <- data.frame(word = c("silly", "dafaq", "dafuq", "cringe", "picky"), score
 neg2 <- data.frame(word = c("jialat", "waited", "waiting", "rubbish", "lousy", "siao", "??", "-_-", "-.-", "lying", "lies", "wtf", "wts", "sicko", "slap", "slapped"), score = -2)
 neg4 <- data.frame(word = c("freaking", "knn", "ccb", "fk", "fking", "moronic"), score = -4)
 
-# Merge changes with main AFINN list
+# Merge changes with main list
 afinn_list <- rbind(afinn_list, pos4, pos2, pos1, neg1, neg2, neg4)
 ```
-*Note: I don't really have an objective basis for why some swear words get a higher rating
-than others, but I classified them by how angry my mother would be when I say them.*
+*Note: I don't really have an objective basis for why some swear words get a higher rating than others, but I classified them by how angry my mother would be when I say them.*
 
-With this dictionary, I calculated the net sentiment for each comment.
+With this dictionary, I calculated the average AFINN score for each comment.
 
 ```R
 ## Split comments to single words per cell
@@ -323,25 +367,11 @@ data_indv <- strsplit(data$post_comment, split = " ")
 data_words <- data.frame(message_ID = rep(data$message_ID, sapply(data_indv, length)), words = unlist(data_indv))
 data_words$words <- tolower(data_words$words)
 
-# Customise stopwords list
-library(tm)
-stop_words <- as.data.frame(stopwords("en"))
-more_stopwords <- as.data.frame(c("uber", "grab")) # add more if you want
-names(stop_words)[1] <- "words"; names(more_stopwords)[1] <- "words"
-stop_words <- rbind(stop_words, more_stopwords)
-detach("package:tm", unload=TRUE)
-
-# Remove stopwords
-data_words <- data_words[!(data_words$words %in% stop_words$words),]
-
 # Remove punctuation, empty rows, NA
 data_words <- transform(data_words, words = (sub("^([[:alpha:]]*).*", "\\1", data_words$words)))
-data_words <- data_words[(!data_words$words==""),] # n= 39826
-data_words <- data_words[!(data_words$words %in% stop_words$words),]
-data_words <- data_words[!is.na(data_words$words),]
-detach("package:plyr", unload=TRUE)
+data_words <- data_words[(!data_words$words==""),] 
 
-# Calculate mean of each comments' word scores via the AFINN list
+# Calculate mean 
 data_afinn <- data_words %>%
     dplyr::group_by(message_ID) %>%
     dplyr::summarise(mean = mean(score, na.rm=TRUE)) 
@@ -392,13 +422,13 @@ ggplot(data = boxplots, aes(x=reorder(factor(Date), Month_num), y=AFINN)) + geom
 
 As we can see, there's also a visible difference in customer sentiment towards Grab and Uber at word level, with Grab scoring slightly higher than Uber on the positive words scale. Could it be that Grab's customers are nicer? *Or simply that they've been giving more promos? :-)*
 
-Anyway, let's test if this trend continues under a more sensitive linguistics analysis. So far, the method of assigning scores to dictionaries presents a rudimentary way to estimate the tone of a comment. In a funny way, it's definitely handy for checking out which company's users swear more. But this method misses out on many other aspects of natural language -- double negatives, amplifiers, adversative conjunctions and negators.
+Anyway, let's test if this interesting trend holds up under a more sensitive linguistics analysis. So far, the method of assigning scores to dictionaries presents a rudimentary way to estimate the tone of a comment. It's definitely handy for checking out which company's users swear more. However, this method misses out on many other aspects of natural language -- double negatives, amplifiers, adversative conjunctions and negators.
 
-Tyler Rinkle wrote a beautiful primer that explains what these linguistic features mean, and why they matter. In his [introduction](https://github.com/trinker/sentimentr#why-sentiment), he writes: 
+A quick snippet on what these features are, and why they matter in linguistics: 
 
 > "A negator flips the sign of a polarized word (e.g., "I do **not** like it."). An amplifier (intensifier) increases the impact of a polarized word (e.g., "I **really** like it.").  A de-amplifier (downtoner) reduces the impact of a polarized word (e.g., "I **hardly** like it."). An adversative conjunction overrules the previous clause containing a polarized word (e.g., "I like it **but** it's not worth it.")."
 
-I've not been paying attention to grammatical features in the language and perhaps that's why Grab appears to be doing better. To address those, I used his `sentimentr` package. 
+To address these, I'll use the `sentimentr` package by [Tyler Rinkle](https://github.com/trinker/sentimentr#why-sentiment). He writes: 
 
 > `SentimentR` is a dictionary lookup approach that tries to incorporate weighting for valence shifters. Matthew Jocker created the `syuzhet` package that utilizes dictionary lookups for the Bing, NRC, and Afinn methods as well as a custom dictionary. ... Jocker's dictionary methods are fast but are more prone to error in the case of valence shifters. ... In my own work I need better accuracy than a simple dictionary lookup; something that considers valence shifters yet optimizes speed which the Stanford's parser does not. This leads to a trade off of speed vs. accuracy. Simply, sentimentr attempts to balance accuracy and speed.
 
@@ -435,19 +465,20 @@ uber_boxplot2 <- uber %>%
 
 # Format decimal places, remove NAs, add labels
 boxplots2 <- rbind(grab_boxplot2, uber_boxplot2)
-boxplots2$SentimentR <- round(boxplots2$SentimentR, digits=2)
-boxplots2[is.na(boxplots2)] <- 0
+boxplots2$SentimentR <- round(boxplots2$SentimentR, digits=2); boxplots2[is.na(boxplots2)] <- 0
 boxplots2 <- left_join(boxplots2, Labels, by=c("Month_num" = "num")) 
 
 # Boxplot per month by score
-ggplot(data = boxplots2, aes(x=reorder(factor(Date), Month_num), y=SentimentR)) + 
-    geom_boxplot(aes(fill=Company)) + scale_fill_brewer(palette = "Pastel2") + xlab(NULL) +
-    ggtitle("Distribution of Sentiment by Sentence", subtitle = "(Sentiment analysis through SentimentR pkg, based on public data from Facebook)") +
-    scale_y_continuous(name = "SR score (neg=rude, pos=polite)", breaks = seq(-1, 1, 0.2), limits=c(-1, 1)) +
-    theme(plot.title = element_text(family="Tahoma", face="bold", size=15), axis.title = element_text(size=9),
-          plot.subtitle = element_text(face="italic",size=6), legend.title = element_text(face="italic",size=6),
-          legend.position = "bottom", legend.box = "horizontal", legend.box.just="left",
-          legend.key.size = unit(0.5, "cm"), legend.text = element_text(face="bold",size = 6)) 
+ggplot(data = boxplots2, aes(x = reorder(factor(Date), Month_num), y = SentimentR)) + 
+    geom_boxplot(aes(fill = Company)) + scale_fill_brewer(palette = "Pastel2") + xlab(NULL) +
+    ggtitle("Distribution of Sentiment by Sentence", 
+    subtitle = "(Sentiment analysis through SentimentR pkg, based on public data from Facebook)") +
+    scale_y_continuous(name = "SR score (neg=rude, pos=polite)", breaks = seq(-1, 1, 0.2), limits = c(-1, 1)) +
+    theme(plot.title = element_text(face = "bold", size = 15), axis.title = element_text(size = 9),
+          plot.subtitle = element_text(face = "italic", size = 6), legend.box.just = "left",
+          legend.title = element_text(face = "italic", size = 6), legend.box = "horizontal", 
+          legend.position = "bottom", legend.key.size = unit(0.5, "cm"), 
+          legend.text = element_text(face="bold",size = 6)) 
 
 ```
 ![Imgur](https://i.imgur.com/VNWzYnY.jpg)
@@ -471,20 +502,48 @@ Scores in both companies' datasets are moderately correlated `40%` with certaint
 
 This is getting pretty exciting. 
 
-Moving forward, I'll definitely keep these features for use in the machine. 
+Moving forward, I'll definitely keep these features for use in the algorithm. 
 
-# Machine learning for sentiment classification
+# Machine Learning
 
-... 
+### Build training set 
 
-Some explanation about naive bayes 
+To build the training set, I manually tagged about ~30% of the comments (2,600) as `positive`, `neutral`, `negative`. This took about 6 hours. I noticed that most comments were complaints or queries, so I ignored their content (mostly neutral or negative) and focused on their *tone* (which could still be positive - ie. an unhappy but still polite customer). 
+
+To get a baseline of how well the classifier would perform without support features, I ran the pure comments data straight through the `naive bayes` machine from the `e1071` package.
 
 ```R
 library(e1071)
+data_lab <- data[!is.na(data$sentiment),] 
+classifier_l <- naiveBayes(data_lab[,3], data_lab[,5])
+predicted_l <- predict(classifier_l, data_lab)
+results_l <- table(predicted_l, data_lab[,5], dnn=list('predicted','actual'))
+binom.test(results_l[1,1] + results_l[2,2]+ results_l[3,3], nrow(data_lab), p=0.5)
+```
+The classifier couldn't work (as expected):
+```R
+          actual
+predicted  negative neutral positive
+  negative        0       0        0
+  neutral       584    1516      536
+  positive        0       0        0
+```
+I ran it again with the predictors including variables like `hour`, `day of week` and `wordcount`. This increased the accuracy by `3%`:
+```R
+classifier_l <- naiveBayes(data_lab[,c(3,7,8,10)], data_lab[,5])
+predicted_l <- predict(classifier_l, data_lab)
+results_l <- table(predicted_l, data_lab[,5], dnn=list('predicted','actual'))
+binom.test(results_l[1,1] + results_l[2,2]+ results_l[3,3], nrow(data_lab), p=0.5)
 
-# Applied
-lab_data <- data[!is.na(data$sentiment),] 
-lab_data[is.na(lab_data)] <- 0
+            actual
+predicted  negative neutral positive
+  negative      117      48       63
+  neutral       451    1453      450
+  positive       16      15       23
+```
+Then, I added in features we built earlier - the `AFINN` scores and the `SentimentR` scores. This improved the accuracy more: 
+
+```R
 lab_uber <- lab_data[lab_data$Company=="uber",]
 lab_grab <- lab_data[lab_data$Company=="grab",]
 
@@ -518,6 +577,12 @@ positive   16      75      106
 # 95 percent confidence interval: 0.6680392 0.7171959
 # Final probability of success: 0.6930266 
 ```
+Based on Rinkle's calculations, the average performance of 3 well-known packages 
+
+> Some explanation here
+
+### Apply to test set
+
 I'll apply this same algorithm to classify the remaining 4000+ unlabelled comments.  
 
 A note - While this classifier isn't exceptionally accurate (at `70%`), it skews sentiment detection *in the same way* for both datasets. Meaning, if it tends to classify Uber's posts as negative, it would classify Grab's posts as negative by the same degree too.
@@ -608,7 +673,6 @@ The size of the bubbles correspond to the number of posts that day, while the co
 
 Final visualisation: Top words per category. Bear with me, this is gonna be long. 
 ````
-# ---------------------------------------------------------------------------- #
 # [plot 9 = Weighted scatterplot of sentiment X company X time]
 
 # Merge both datasets for graph
