@@ -2,12 +2,9 @@
 
 ### Background
 
-Grab and Uber are competing pretty hard for the local market right now. After 
-Travis' controversies started in Feb 2017, I noticed some friends grew polarised towards one company or the other. 
-I wondered if the company's press image would affect the way other customers felt towards the brand as well. 
+Grab and Uber are competing hard for the local market right now. After Uber's controversies in Feb 2017, I noticed various friends grew polarised towards one company or the other. Subsequently, I wondered how the company's image would affect the way other customers felt towards the brand as well. 
 
-This post outlines the process I used to mine public Facebook data using Graph API and `R `for Uber and Grab. 
-I then built a `naive bayes` sentiment classifier to label the data and visualised the results below. All in all,
+This post outlines the process I used to mine public data from Facebook for Uber and Grab. I used Graph API to access the data, `e1071`, `RTextTools` and `SentimentR` on `R` to conduct sentiment analysis, and then visualised the results with `ggplot`. All in all,
 I'm looking to see if there is a difference in the way people feel toward Grab and Uber.
 
 **Quick outline of workflow:**
